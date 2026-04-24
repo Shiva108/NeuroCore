@@ -1,0 +1,29 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local secrets and operator state
+.env
+token.json
+secrets.json
+preferences.json
+
+# Local runtime data
+data/
+outputs/
+output*.md
+*.output.md
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+{
+  "default_namespace": "default",
+  "default_bucket": "work",
+  "default_top_k": 8,
+  "enable_dashboard": false,
+  "notes": "Copy to preferences.json for local-only operator settings. Do not commit real values."
+}

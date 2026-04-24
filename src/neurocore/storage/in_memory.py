@@ -1,0 +1,394 @@
+"""In-memory storage backend for NeuroCore."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime
+
+from neurocore.core.models import (
+    MemoryChunk,
+    MemoryDocument,
+    MemoryRecord,
+    RetrievalArtifact,
+)
+from neurocore.ingest.normalize import compute_content_fingerprint, normalize_content
+from neurocore.ingest.dedup import DedupIndex
+from neurocore.storage.base import BaseStore, Candidate
+
+
+class InMemoryStore(BaseStore):
+    def __init__(self) -> None:
+        self.records: dict[str, MemoryRecord] = {}
+        self.documents: dict[str, MemoryDocument] = {}
+        self.chunks: dict[str, MemoryChunk] = {}
+        self.artifacts: dict[str, RetrievalArtifact] = {}
+        self.document_chunks: dict[str, list[str]] = {}
+        self.dedup_index = DedupIndex()
+        self.audit_events: list[dict[str, object]] = []
+
+    def find_duplicate(
+        self, namespace: str, fingerprint: str, signature: str
+    ) -> str | None:
+        return self.dedup_index.lookup(namespace, fingerprint, signature)
+
+    def save_record(self, record: MemoryRecord, signature: str) -> None:
+        self.records[record.id] = record
+        self.artifacts[record.id] = _record_artifact(record)
+        self.dedup_index.register(
+            namespace=record.namespace,
+            fingerprint=record.content_fingerprint,
+            item_id=record.id,
+            signature=signature,
+        )
+
+    def save_document(
+        self, document: MemoryDocument, chunks: list[MemoryChunk], signature: str
+    ) -> None:
+        self.documents[document.id] = document
+        self.document_chunks[document.id] = [chunk.id for chunk in chunks]
+        existing_chunk_ids = {
+            artifact_id
+            for artifact_id, artifact in self.artifacts.items()
+            if artifact.document_id == document.id
+        }
+        for chunk in chunks:
+            self.chunks[chunk.id] = chunk
+            self.artifacts[chunk.id] = _chunk_artifact(document, chunk)
+            existing_chunk_ids.discard(chunk.id)
+        for chunk_id in existing_chunk_ids:
+            self.chunks.pop(chunk_id, None)
+            self.artifacts.pop(chunk_id, None)
+        self.dedup_index.register(
+            namespace=document.namespace,
+            fingerprint=document.content_fingerprint,
+            item_id=document.id,
+            signature=signature,
+        )
+
+    def get_record(
+        self, item_id: str, include_archived: bool = False
+    ) -> MemoryRecord | None:
+        record = self.records.get(item_id)
+        if record is None:
+            return None
+        if record.archived_at and not include_archived:
+            return None
+        return record
+
+    def get_document(
+        self, item_id: str, include_archived: bool = False
+    ) -> MemoryDocument | None:
+        document = self.documents.get(item_id)
+        if document is None:
+            return None
+        archived_at = getattr(document, "archived_at", None)
+        if archived_at and not include_archived:
+            return None
+        return document
+
+    def get_chunk(self, item_id: str) -> MemoryChunk | None:
+        return self.chunks.get(item_id)
+
+    def get_document_chunk_ids(self, document_id: str) -> list[str]:
+        return list(self.document_chunks.get(document_id, []))
+
+    def get_artifact(self, item_id: str) -> RetrievalArtifact | None:
+        return self.artifacts.get(item_id)
+
+    def list_records(self, include_archived: bool = False) -> list[MemoryRecord]:
+        records = list(self.records.values())
+        if include_archived:
+            return sorted(records, key=lambda item: item.created_at, reverse=True)
+        return sorted(
+            [record for record in records if record.archived_at is None],
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+
+    def list_documents(self, include_archived: bool = False) -> list[MemoryDocument]:
+        documents = list(self.documents.values())
+        if include_archived:
+            return sorted(documents, key=lambda item: item.created_at, reverse=True)
+        return sorted(
+            [document for document in documents if document.archived_at is None],
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+
+    def list_audit_events(self, limit: int = 20) -> list[dict[str, object]]:
+        return list(reversed(self.audit_events[-limit:]))
+
+    def update_record(
+        self, item_id: str, patch: dict[str, object], mode: str
+    ) -> MemoryRecord:
+        record = self.records[item_id]
+        updated = replace(
+            record,
+            title=patch.get("title", record.title),
+            metadata=patch.get("metadata", record.metadata),
+            tags=tuple(patch.get("tags", record.tags)),
+            updated_at=datetime.now(UTC),
+            supersedes_id=patch.get("supersedes_id", record.supersedes_id),
+        )
+        self.records[item_id] = updated
+        self.artifacts[item_id] = _record_artifact(updated)
+        return updated
+
+    def update_document(
+        self, item_id: str, patch: dict[str, object], mode: str
+    ) -> MemoryDocument:
+        document = self.documents[item_id]
+        updated = replace(
+            document,
+            title=patch.get("title", document.title),
+            metadata=patch.get("metadata", document.metadata),
+            tags=tuple(patch.get("tags", document.tags)),
+            summary=patch.get("summary", document.summary),
+            updated_at=datetime.now(UTC),
+            supersedes_id=patch.get("supersedes_id", document.supersedes_id),
+        )
+        self.documents[item_id] = updated
+        for chunk_id in self.document_chunks.get(item_id, []):
+            chunk = self.chunks.get(chunk_id)
+            if chunk is not None:
+                self.artifacts[chunk_id] = _chunk_artifact(updated, chunk)
+        return updated
+
+    def soft_delete(self, item_id: str, reason: str) -> None:
+        timestamp = datetime.now(UTC)
+        if item_id in self.records:
+            self.records[item_id] = replace(
+                self.records[item_id],
+                archived_at=timestamp,
+                updated_at=timestamp,
+            )
+            artifact = self.artifacts.get(item_id)
+            if artifact is not None:
+                self.artifacts[item_id] = replace(
+                    artifact, archived_at=timestamp, indexed_at=timestamp
+                )
+            return
+        if item_id in self.documents:
+            document = self.documents[item_id]
+            archived_document = replace(
+                document,
+                archived_at=timestamp,
+                updated_at=timestamp,
+            )
+            self.documents[item_id] = archived_document
+            for chunk_id in self.document_chunks.get(item_id, []):
+                artifact = self.artifacts.get(chunk_id)
+                if artifact is not None:
+                    self.artifacts[chunk_id] = replace(
+                        artifact,
+                        archived_at=timestamp,
+                        indexed_at=timestamp,
+                    )
+            return
+        raise KeyError(item_id)
+
+    def hard_delete(self, item_id: str) -> None:
+        if item_id in self.records:
+            del self.records[item_id]
+            self.artifacts.pop(item_id, None)
+            _remove_dedup_entries(self.dedup_index, item_id)
+            return
+        if item_id in self.documents:
+            for chunk_id in self.document_chunks.get(item_id, []):
+                self.chunks.pop(chunk_id, None)
+                self.artifacts.pop(chunk_id, None)
+            self.document_chunks.pop(item_id, None)
+            del self.documents[item_id]
+            _remove_dedup_entries(self.dedup_index, item_id)
+            return
+        raise KeyError(item_id)
+
+    def iter_candidates(
+        self,
+        namespace: str,
+        allowed_buckets: tuple[str, ...],
+        include_archived: bool = False,
+    ) -> list[Candidate]:
+        candidates: list[Candidate] = []
+        for artifact in self.artifacts.values():
+            if (
+                artifact.namespace != namespace
+                or artifact.bucket not in allowed_buckets
+            ):
+                continue
+            if artifact.archived_at and not include_archived:
+                continue
+            if artifact.item_kind == "record":
+                record = self.records.get(artifact.item_id)
+                if record is None:
+                    continue
+                candidates.append(
+                    Candidate(kind="record", item=record, artifact=artifact)
+                )
+                continue
+
+            chunk = self.chunks.get(artifact.item_id)
+            document = self.documents.get(artifact.document_id or "")
+            if chunk is None or document is None:
+                continue
+            candidates.append(
+                Candidate(
+                    kind="chunk",
+                    item=chunk,
+                    artifact=artifact,
+                    document=document,
+                )
+            )
+
+        return candidates
+
+    def reindex(
+        self,
+        ids: list[str],
+        scope: str,
+        semantic_backend: str = "none",
+        semantic_model_name: str | None = None,
+    ) -> tuple[int, int, list[str]]:
+        processed = 0
+        failed = 0
+        warnings: list[str] = []
+        status, status_warning = _semantic_status(semantic_backend)
+        if status_warning is not None:
+            warnings.append(status_warning)
+        for item_id in ids:
+            rebuilt = False
+            if scope in {"records", "all"}:
+                record = self.records.get(item_id)
+                if record is not None:
+                    self.artifacts[item_id] = _record_artifact(
+                        record,
+                        semantic_backend=semantic_backend,
+                        semantic_model_name=semantic_model_name,
+                        semantic_status=status,
+                    )
+                    rebuilt = True
+            if scope in {"documents", "all"}:
+                document = self.documents.get(item_id)
+                if document is not None:
+                    for chunk_id in self.document_chunks.get(item_id, []):
+                        chunk = self.chunks.get(chunk_id)
+                        if chunk is None:
+                            continue
+                        self.artifacts[chunk_id] = _chunk_artifact(
+                            document,
+                            chunk,
+                            semantic_backend=semantic_backend,
+                            semantic_model_name=semantic_model_name,
+                            semantic_status=status,
+                        )
+                    rebuilt = True
+            if rebuilt:
+                processed += 1
+            else:
+                failed += 1
+        return processed, failed, warnings
+
+    def record_audit(
+        self, actor: str, operation: str, target_ids: list[str], outcome: str
+    ) -> None:
+        self.audit_events.append(
+            {
+                "actor": actor,
+                "operation": operation,
+                "target_ids": target_ids,
+                "timestamp": datetime.now(UTC),
+                "outcome": outcome,
+            }
+        )
+
+    def has_item(self, item_id: str) -> bool:
+        return (
+            item_id in self.records
+            or item_id in self.documents
+            or item_id in self.chunks
+        )
+
+
+def _record_artifact(
+    record: MemoryRecord,
+    *,
+    semantic_backend: str = "none",
+    semantic_model_name: str | None = None,
+    semantic_status: str = "metadata_only",
+) -> RetrievalArtifact:
+    normalized_text = normalize_content(record.content)
+    return RetrievalArtifact(
+        item_id=record.id,
+        item_kind="record",
+        document_id=None,
+        namespace=record.namespace,
+        bucket=record.bucket,
+        sensitivity=record.sensitivity,
+        source_type=record.source_type,
+        tags=record.tags,
+        normalized_text=normalized_text,
+        text_hash=compute_content_fingerprint(normalized_text),
+        created_at=record.created_at,
+        archived_at=record.archived_at,
+        semantic_backend=semantic_backend,
+        semantic_model_name=semantic_model_name,
+        semantic_status=semantic_status,
+        indexed_at=datetime.now(UTC),
+    )
+
+
+def _chunk_artifact(
+    document: MemoryDocument,
+    chunk: MemoryChunk,
+    *,
+    semantic_backend: str = "none",
+    semantic_model_name: str | None = None,
+    semantic_status: str = "metadata_only",
+) -> RetrievalArtifact:
+    normalized_text = normalize_content(chunk.chunk_text)
+    return RetrievalArtifact(
+        item_id=chunk.id,
+        item_kind="chunk",
+        document_id=document.id,
+        namespace=chunk.namespace,
+        bucket=chunk.bucket,
+        sensitivity=chunk.sensitivity,
+        source_type=document.source_type,
+        tags=document.tags,
+        normalized_text=normalized_text,
+        text_hash=compute_content_fingerprint(normalized_text),
+        created_at=chunk.created_at,
+        archived_at=document.archived_at,
+        semantic_backend=semantic_backend,
+        semantic_model_name=semantic_model_name,
+        semantic_status=semantic_status,
+        indexed_at=datetime.now(UTC),
+    )
+
+
+def _semantic_status(semantic_backend: str) -> tuple[str, str | None]:
+    if semantic_backend == "none":
+        return "metadata_only", None
+    if semantic_backend == "sentence-transformers":
+        try:
+            import sentence_transformers  # noqa: F401
+        except ImportError:
+            return (
+                "unavailable",
+                "Semantic backend sentence-transformers is unavailable; artifacts were rebuilt in metadata-only mode.",
+            )
+        return "ready", None
+    return (
+        "unknown",
+        f"Semantic backend {semantic_backend} is unknown; artifacts were rebuilt in metadata-only mode.",
+    )
+
+
+def _remove_dedup_entries(dedup_index: DedupIndex, item_id: str) -> None:
+    stale_keys = [
+        key
+        for key, existing_item_id in dedup_index._entries.items()
+        if existing_item_id == item_id
+    ]
+    for key in stale_keys:
+        dedup_index._entries.pop(key, None)

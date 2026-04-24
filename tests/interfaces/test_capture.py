@@ -1,0 +1,288 @@
+from datetime import datetime
+
+import pytest
+
+import neurocore.interfaces.capture as capture_module
+
+from neurocore.core.config import NeuroCoreConfig
+from neurocore.interfaces.capture import capture_memory
+from neurocore.storage.in_memory import InMemoryStore
+from neurocore.storage.router import RoutedStore
+
+
+def build_config() -> NeuroCoreConfig:
+    return NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research", "planning", "ops"),
+        default_sensitivity="standard",
+        max_atomic_tokens=6,
+        target_chunk_tokens=6,
+        max_chunk_tokens=8,
+        chunk_overlap_tokens=2,
+    )
+
+
+def test_capture_memory_returns_record_contract_for_short_content():
+    store = InMemoryStore()
+    config = build_config()
+
+    response = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "short stable note",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+
+    assert response["kind"] == "record"
+    assert response["stored"] is True
+    assert response["deduplicated"] is False
+    assert response["chunk_count"] == 0
+
+
+def test_capture_memory_returns_document_contract_and_deduplicates_repeated_capture():
+    store = InMemoryStore()
+    config = build_config()
+    request = {
+        "namespace": "project-alpha",
+        "bucket": "research",
+        "sensitivity": "standard",
+        "content": (
+            "Sentence one explains the system. "
+            "Sentence two adds retrieval detail. "
+            "Sentence three covers isolation policy."
+        ),
+        "content_format": "markdown",
+        "source_type": "note",
+        "title": "Design note",
+    }
+
+    first = capture_memory(request, store=store, config=config)
+    chunk_total = len(store.chunks)
+    second = capture_memory(request, store=store, config=config)
+
+    assert first["kind"] == "document"
+    assert first["chunk_count"] > 0
+    assert second["deduplicated"] is True
+    assert len(store.chunks) == chunk_total
+
+
+def test_capture_module_does_not_expose_admin_operations():
+    assert not hasattr(capture_module, "delete_memory")
+    assert not hasattr(capture_module, "update_memory")
+
+
+def test_capture_memory_honors_caller_supplied_created_at():
+    store = InMemoryStore()
+    config = build_config()
+    created_at = "2026-01-05T10:30:00+00:00"
+
+    response = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "created at note",
+            "content_format": "markdown",
+            "source_type": "note",
+            "created_at": created_at,
+        },
+        store=store,
+        config=config,
+    )
+
+    stored = store.get_record(response["id"])
+
+    assert stored is not None
+    assert stored.created_at == datetime.fromisoformat(created_at)
+
+
+def test_capture_memory_defaults_namespace_from_config_when_omitted():
+    store = InMemoryStore()
+    config = build_config()
+
+    response = capture_memory(
+        {
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "namespace fallback note",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+
+    stored = store.get_record(response["id"])
+
+    assert response["namespace"] == "project-alpha"
+    assert stored is not None
+    assert stored.namespace == "project-alpha"
+
+
+def test_capture_memory_rejects_missing_bucket():
+    store = InMemoryStore()
+    config = build_config()
+
+    with pytest.raises(ValueError, match="bucket"):
+        capture_memory(
+            {
+                "namespace": "project-alpha",
+                "sensitivity": "standard",
+                "content": "missing bucket note",
+                "content_format": "markdown",
+                "source_type": "note",
+            },
+            store=store,
+            config=config,
+        )
+
+
+def test_capture_memory_rejects_oversized_content():
+    store = InMemoryStore()
+    config = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        max_content_tokens=3,
+    )
+
+    with pytest.raises(ValueError, match="maximum content size"):
+        capture_memory(
+            {
+                "namespace": "project-alpha",
+                "bucket": "research",
+                "sensitivity": "standard",
+                "content": "one two three four",
+                "content_format": "markdown",
+                "source_type": "note",
+            },
+            store=store,
+            config=config,
+        )
+
+
+def test_capture_memory_merges_safe_metadata_when_deduplicating():
+    store = InMemoryStore()
+    config = build_config()
+    request = {
+        "namespace": "project-alpha",
+        "bucket": "research",
+        "sensitivity": "standard",
+        "content": "stable dedup note",
+        "content_format": "markdown",
+        "source_type": "note",
+        "metadata": {"owner": "alice"},
+        "tags": ["alpha"],
+    }
+
+    first = capture_memory(request, store=store, config=config)
+    second = capture_memory(
+        {
+            **request,
+            "metadata": {"reviewer": "bob"},
+            "tags": ["beta"],
+        },
+        store=store,
+        config=config,
+    )
+
+    stored = store.get_record(first["id"])
+
+    assert second["deduplicated"] is True
+    assert stored is not None
+    assert stored.metadata == {"owner": "alice", "reviewer": "bob"}
+    assert stored.tags == ("alpha", "beta")
+
+
+def test_capture_memory_records_chunk_offsets_for_documents():
+    store = InMemoryStore()
+    config = build_config()
+
+    capture = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": (
+                "Sentence one explains the system. "
+                "Sentence two adds retrieval detail. "
+                "Sentence three covers isolation policy."
+            ),
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+
+    chunk_ids = store.get_document_chunk_ids(capture["id"])
+    first_chunk = store.get_chunk(chunk_ids[0])
+
+    assert first_chunk is not None
+    assert first_chunk.start_offset == 0
+    assert first_chunk.end_offset is not None
+    assert first_chunk.end_offset > first_chunk.start_offset
+
+
+class FailingDocumentStore(InMemoryStore):
+    def save_document(self, document, chunks, signature):  # type: ignore[override]
+        raise RuntimeError("simulated failure")
+
+
+def test_capture_memory_does_not_persist_partial_document_on_store_failure():
+    store = FailingDocumentStore()
+    config = build_config()
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        capture_memory(
+            {
+                "namespace": "project-alpha",
+                "bucket": "research",
+                "sensitivity": "standard",
+                "content": (
+                    "Sentence one explains the system. "
+                    "Sentence two adds retrieval detail. "
+                    "Sentence three covers isolation policy."
+                ),
+                "content_format": "markdown",
+                "source_type": "note",
+            },
+            store=store,
+            config=config,
+        )
+
+    assert store.documents == {}
+    assert store.chunks == {}
+
+
+def test_capture_memory_does_not_deduplicate_across_sensitivity_levels():
+    store = RoutedStore(primary_store=InMemoryStore(), sealed_store=InMemoryStore())
+    config = build_config()
+    request = {
+        "namespace": "project-alpha",
+        "bucket": "research",
+        "content": "shared content",
+        "content_format": "markdown",
+        "source_type": "note",
+    }
+
+    sealed_capture = capture_memory(
+        {**request, "sensitivity": "sealed"},
+        store=store,
+        config=config,
+    )
+    standard_capture = capture_memory(
+        {**request, "sensitivity": "standard"},
+        store=store,
+        config=config,
+    )
+
+    assert sealed_capture["deduplicated"] is False
+    assert standard_capture["deduplicated"] is False
+    assert sealed_capture["id"] != standard_capture["id"]
