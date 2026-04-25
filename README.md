@@ -47,7 +47,7 @@ source of truth for the system.
 ├── tests/                 # Pytest suite grouped by subsystem
 ├── scripts/               # Local bootstrap and repo helper scripts
 ├── docs/
-│   ├── ssd/               # Architecture, specification, implementation plan
+│   ├── ssd/               # Architecture, specification, plan, source matrix
 │   ├── setup.md           # Setup guide
 │   ├── security.md        # Security handling and publication guidance
 │   └── troubleshooting.md # Common setup and runtime issues
@@ -258,6 +258,10 @@ checks across Python 3.11, 3.12, and 3.13.
 - [Troubleshooting](docs/troubleshooting.md)
 - [AI-Assisted Setup](docs/ai-assisted-setup.md)
 - [Contributing Guide](CONTRIBUTING.md)
+- [SSD Architecture](docs/ssd/architecture.md)
+- [SSD Specification](docs/ssd/specification.md)
+- [SSD Implementation Plan](docs/ssd/implementation-plan.md)
+- [SSD Source Matrix](docs/ssd/source-matrix.md)
 
 ## Demo Screenshots
 
