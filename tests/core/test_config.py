@@ -3,6 +3,16 @@ import pytest
 from neurocore.core.config import ConfigError, NeuroCoreConfig, load_config
 
 
+def minimal_env(**overrides: str) -> dict[str, str]:
+    values = {
+        "NEUROCORE_DEFAULT_NAMESPACE": "project-alpha",
+        "NEUROCORE_ALLOWED_BUCKETS": "research,planning",
+        "NEUROCORE_DEFAULT_SENSITIVITY": "restricted",
+    }
+    values.update(overrides)
+    return values
+
+
 def test_load_config_requires_mandatory_environment_variables(monkeypatch):
     required_keys = [
         "NEUROCORE_DEFAULT_NAMESPACE",
@@ -18,29 +28,25 @@ def test_load_config_requires_mandatory_environment_variables(monkeypatch):
 
 
 def test_load_config_rejects_invalid_bucket_entries(monkeypatch):
-    monkeypatch.setenv("NEUROCORE_DEFAULT_NAMESPACE", "project-alpha")
-    monkeypatch.setenv("NEUROCORE_ALLOWED_BUCKETS", "research,invalid bucket")
-    monkeypatch.setenv("NEUROCORE_DEFAULT_SENSITIVITY", "standard")
-
     with pytest.raises(ConfigError, match="bucket"):
-        load_config()
+        load_config(
+            env=minimal_env(
+                NEUROCORE_ALLOWED_BUCKETS="research,invalid bucket",
+                NEUROCORE_DEFAULT_SENSITIVITY="standard",
+            )
+        )
 
 
 def test_load_config_rejects_invalid_sensitivity(monkeypatch):
-    monkeypatch.setenv("NEUROCORE_DEFAULT_NAMESPACE", "project-alpha")
-    monkeypatch.setenv("NEUROCORE_ALLOWED_BUCKETS", "research,planning")
-    monkeypatch.setenv("NEUROCORE_DEFAULT_SENSITIVITY", "top-secret")
-
     with pytest.raises(ConfigError, match="sensitivity"):
-        load_config()
+        load_config(env=minimal_env(NEUROCORE_DEFAULT_SENSITIVITY="top-secret"))
 
 
 def test_load_config_applies_documented_defaults(monkeypatch):
-    monkeypatch.setenv("NEUROCORE_DEFAULT_NAMESPACE", "project-alpha")
-    monkeypatch.setenv("NEUROCORE_ALLOWED_BUCKETS", "research,planning")
-    monkeypatch.setenv("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
+    monkeypatch.setenv("NEUROCORE_STORAGE_BACKEND", "sqlite")
+    monkeypatch.setenv("NEUROCORE_SEMANTIC_BACKEND", "sentence-transformers")
 
-    config = load_config()
+    config = load_config(env=minimal_env())
 
     assert isinstance(config, NeuroCoreConfig)
     assert config.default_namespace == "project-alpha"
@@ -71,33 +77,28 @@ def test_load_config_applies_documented_defaults(monkeypatch):
 
 
 def test_load_config_accepts_extended_backend_and_adapter_settings(monkeypatch):
-    monkeypatch.setenv("NEUROCORE_DEFAULT_NAMESPACE", "project-alpha")
-    monkeypatch.setenv("NEUROCORE_ALLOWED_BUCKETS", "research,planning")
-    monkeypatch.setenv("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
-    monkeypatch.setenv("NEUROCORE_STORAGE_BACKEND", "postgres")
-    monkeypatch.setenv("NEUROCORE_PRIMARY_STORE_PATH", "/tmp/neurocore.db")
-    monkeypatch.setenv("NEUROCORE_SEALED_STORE_PATH", "/tmp/neurocore.sealed.db")
-    monkeypatch.setenv("NEUROCORE_SEMANTIC_BACKEND", "sentence-transformers")
-    monkeypatch.setenv("NEUROCORE_SEMANTIC_MODEL_NAME", "test-model")
-    monkeypatch.setenv("NEUROCORE_MAX_CONTENT_TOKENS", "1024")
-    monkeypatch.setenv("NEUROCORE_ENABLE_HTTP_ADAPTER", "true")
-    monkeypatch.setenv("NEUROCORE_ENABLE_MCP_ADAPTER", "true")
-    monkeypatch.setenv("NEUROCORE_ENABLE_DASHBOARD", "true")
-    monkeypatch.setenv("NEUROCORE_ENABLE_BACKGROUND_SUMMARIZATION", "true")
-    monkeypatch.setenv("NEUROCORE_PRODUCTION_BACKEND_PROVIDER", "neon")
-    monkeypatch.setenv("NEUROCORE_PRODUCTION_DATABASE_URL", "postgresql://primary")
-    monkeypatch.setenv(
-        "NEUROCORE_PRODUCTION_SEALED_DATABASE_URL", "postgresql://sealed"
+    config = load_config(
+        env=minimal_env(
+            NEUROCORE_STORAGE_BACKEND="postgres",
+            NEUROCORE_PRIMARY_STORE_PATH="/tmp/neurocore.db",
+            NEUROCORE_SEALED_STORE_PATH="/tmp/neurocore.sealed.db",
+            NEUROCORE_SEMANTIC_BACKEND="sentence-transformers",
+            NEUROCORE_SEMANTIC_MODEL_NAME="test-model",
+            NEUROCORE_MAX_CONTENT_TOKENS="1024",
+            NEUROCORE_ENABLE_HTTP_ADAPTER="true",
+            NEUROCORE_ENABLE_MCP_ADAPTER="true",
+            NEUROCORE_ENABLE_DASHBOARD="true",
+            NEUROCORE_ENABLE_BACKGROUND_SUMMARIZATION="true",
+            NEUROCORE_PRODUCTION_BACKEND_PROVIDER="neon",
+            NEUROCORE_PRODUCTION_DATABASE_URL="postgresql://primary",
+            NEUROCORE_PRODUCTION_SEALED_DATABASE_URL="postgresql://sealed",
+            NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS="true",
+            NEUROCORE_CONSENSUS_PROVIDER="openai_compatible",
+            NEUROCORE_CONSENSUS_MODEL_NAMES="gpt-4.1-mini,claude-3.5-sonnet",
+            NEUROCORE_CONSENSUS_BASE_URL="https://api.example.test/v1",
+            NEUROCORE_CONSENSUS_API_KEY="test-key",
+        )
     )
-    monkeypatch.setenv("NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS", "true")
-    monkeypatch.setenv("NEUROCORE_CONSENSUS_PROVIDER", "openai_compatible")
-    monkeypatch.setenv(
-        "NEUROCORE_CONSENSUS_MODEL_NAMES", "gpt-4.1-mini,claude-3.5-sonnet"
-    )
-    monkeypatch.setenv("NEUROCORE_CONSENSUS_BASE_URL", "https://api.example.test/v1")
-    monkeypatch.setenv("NEUROCORE_CONSENSUS_API_KEY", "test-key")
-
-    config = load_config()
 
     assert config.storage_backend == "postgres"
     assert config.primary_store_path == "/tmp/neurocore.db"
@@ -120,30 +121,17 @@ def test_load_config_accepts_extended_backend_and_adapter_settings(monkeypatch):
 
 
 def test_load_config_rejects_invalid_storage_backend(monkeypatch):
-    monkeypatch.setenv("NEUROCORE_DEFAULT_NAMESPACE", "project-alpha")
-    monkeypatch.setenv("NEUROCORE_ALLOWED_BUCKETS", "research,planning")
-    monkeypatch.setenv("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
-    monkeypatch.setenv("NEUROCORE_STORAGE_BACKEND", "oracle")
-
     with pytest.raises(ConfigError, match="storage backend"):
-        load_config()
+        load_config(env=minimal_env(NEUROCORE_STORAGE_BACKEND="oracle"))
 
 
 def test_load_config_rejects_invalid_production_backend_provider(monkeypatch):
-    monkeypatch.setenv("NEUROCORE_DEFAULT_NAMESPACE", "project-alpha")
-    monkeypatch.setenv("NEUROCORE_ALLOWED_BUCKETS", "research,planning")
-    monkeypatch.setenv("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
-    monkeypatch.setenv("NEUROCORE_PRODUCTION_BACKEND_PROVIDER", "mystery-cloud")
-
     with pytest.raises(ConfigError, match="production backend provider"):
-        load_config()
+        load_config(
+            env=minimal_env(NEUROCORE_PRODUCTION_BACKEND_PROVIDER="mystery-cloud")
+        )
 
 
 def test_load_config_rejects_invalid_consensus_provider(monkeypatch):
-    monkeypatch.setenv("NEUROCORE_DEFAULT_NAMESPACE", "project-alpha")
-    monkeypatch.setenv("NEUROCORE_ALLOWED_BUCKETS", "research,planning")
-    monkeypatch.setenv("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
-    monkeypatch.setenv("NEUROCORE_CONSENSUS_PROVIDER", "mystery")
-
     with pytest.raises(ConfigError, match="consensus provider"):
-        load_config()
+        load_config(env=minimal_env(NEUROCORE_CONSENSUS_PROVIDER="mystery"))

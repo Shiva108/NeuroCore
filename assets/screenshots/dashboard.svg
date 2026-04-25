@@ -24,10 +24,16 @@
   <text x="124" y="482" fill="#CBD5E1" font-family="Verdana, sans-serif" font-size="20">External research synthesis / research</text>
   <text x="124" y="522" fill="#CBD5E1" font-family="Verdana, sans-serif" font-size="20">Slack ingestion digest / ops</text>
   <text x="124" y="562" fill="#CBD5E1" font-family="Verdana, sans-serif" font-size="20">Policy review memo / work</text>
-  <rect x="662" y="340" width="510" height="270" rx="26" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
+  <rect x="662" y="340" width="510" height="286" rx="26" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
   <text x="698" y="392" fill="#0F172A" font-family="Verdana, sans-serif" font-size="30" font-weight="700">Publication notes</text>
-  <text x="698" y="444" fill="#334155" font-family="Verdana, sans-serif" font-size="20">• Secrets stay local in ignored files</text>
-  <text x="698" y="484" fill="#334155" font-family="Verdana, sans-serif" font-size="20">• CI runs black, flake8, pytest, governance</text>
-  <text x="698" y="524" fill="#334155" font-family="Verdana, sans-serif" font-size="20">• Beginner-friendly setup and troubleshooting docs</text>
-  <text x="698" y="564" fill="#334155" font-family="Verdana, sans-serif" font-size="20">• README screenshots communicate intent before code review</text>
+  <text x="698" y="440" fill="#334155" font-family="Verdana, Arial, sans-serif" font-size="18">• Secrets stay local in ignored files</text>
+  <text x="698" y="478" fill="#334155" font-family="Verdana, Arial, sans-serif" font-size="18">• CI runs black, flake8, pytest, governance</text>
+  <text x="698" y="516" fill="#334155" font-family="Verdana, Arial, sans-serif" font-size="18">
+    <tspan x="698" dy="0">• Beginner-friendly setup and</tspan>
+    <tspan x="722" dy="24">troubleshooting docs</tspan>
+  </text>
+  <text x="698" y="572" fill="#334155" font-family="Verdana, Arial, sans-serif" font-size="18">
+    <tspan x="698" dy="0">• README screenshots communicate</tspan>
+    <tspan x="722" dy="24">intent before code review</tspan>
+  </text>
 </svg>

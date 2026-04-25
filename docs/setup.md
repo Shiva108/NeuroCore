@@ -9,7 +9,37 @@ full local bootstrap flow for contributors, evaluators, and GitHub visitors.
 - `pip` or another PEP 517-compatible installer
 - Optional: a virtual environment tool such as `venv` or `uv`
 
-## Recommended Local Setup
+## Recommended Bootstrap Path
+
+Use the bootstrap script when you want the fastest working local setup:
+
+```bash
+python scripts/bootstrap.py
+```
+
+By default this path:
+
+- creates or reuses `.venv`
+- installs `.[dev,semantic]`
+- writes `.env` from the security-operator profile
+- copies `secrets.json` and `preferences.json` from their example files
+- creates `data/`
+- runs `pytest` and `python -m neurocore.governance.validation`
+
+If you want a small interactive flow for namespace, `.env` overwrite, and
+verification choices:
+
+```bash
+python scripts/bootstrap.py --wizard
+```
+
+The bootstrap script preserves an existing `.env` unless you pass
+`--force-env`.
+
+## Manual Setup
+
+Use the manual path when you want full control over each setup step or want a
+different local profile than the bootstrap defaults.
 
 1. Create and activate a virtual environment:
 
@@ -34,6 +64,9 @@ cp preferences.json.example preferences.json
 ```
 
 4. Edit the copied files with values appropriate for your environment.
+
+For the security-oriented default values used by the bootstrap flow, see
+[.env.security-operator.example](../.env.security-operator.example).
 
 ## What Each Config File Is For
 
@@ -63,7 +96,7 @@ neurocore --help
 Or invoke the adapter module directly:
 
 ```bash
-python -m neurocore.adapters.cli capture --request-json '{"bucket":"work","content":"hello"}'
+python -m neurocore.adapters.cli capture --request-json '{"bucket":"recon","content":"hello"}'
 ```
 
 ## Optional Runtime Paths

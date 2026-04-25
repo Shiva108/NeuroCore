@@ -4,10 +4,12 @@ This repository is designed for spec-driven implementation with AI pair
 programming. The fastest reliable onboarding flow is:
 
 1. Read `AGENTS.md` and the SSD package in `docs/ssd/`.
-2. Install the project in editable mode with dev dependencies.
-3. Copy `.env.example` values into a local environment file or shell session.
+2. Run `python scripts/bootstrap.py` to create `.venv`, install
+   `.[dev,semantic]`, and write a local `.env`.
+3. Activate `.venv` and load `.env` into the shell before using the CLI.
 4. Run `pytest` to confirm the workspace is healthy before changing behavior.
-5. Run `python -m neurocore.governance.validation` before finalizing repo-facing changes.
+5. Run `python -m neurocore.governance.validation` before finalizing
+   repo-facing changes.
 
 For a full local bootstrap sequence, see [docs/setup.md](./setup.md). For
 publication safety guidance, see [docs/security.md](./security.md).
@@ -24,6 +26,10 @@ publication safety guidance, see [docs/security.md](./security.md).
 - Run the repo validator when changes touch docs, metadata, or governance files so schema and secret checks stay green.
 
 ## Current Validation Entry Point
+
+```bash
+python scripts/bootstrap.py --skip-verify
+```
 
 ```bash
 pytest

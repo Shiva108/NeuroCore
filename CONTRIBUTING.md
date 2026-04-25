@@ -14,14 +14,26 @@ sync.
 
 ## Local Development
 
-1. Create a virtual environment.
-2. Install editable dependencies:
+1. Bootstrap the local workspace:
+
+```bash
+python scripts/bootstrap.py
+```
+
+2. Or use the convenience target:
+
+```bash
+make setup
+```
+
+3. If you need full manual control, create a virtual environment and install
+   editable dependencies:
 
 ```bash
 python3 -m pip install -e ".[dev]"
 ```
 
-3. Run formatting, linting, and tests:
+4. Run formatting, linting, and tests:
 
 ```bash
 black --check src tests
@@ -29,7 +41,7 @@ flake8 src tests
 pytest
 ```
 
-4. Run the repo contract check before opening a PR:
+5. Run the repo contract check before opening a PR:
 
 ```bash
 python -m neurocore.governance.validation

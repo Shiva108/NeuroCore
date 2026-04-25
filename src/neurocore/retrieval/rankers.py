@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from neurocore.core import semantic as semantic_runtime
 from neurocore.storage.base import Candidate
 
 
@@ -26,14 +27,7 @@ class FakeSemanticRanker:
 
 class SentenceTransformersRanker:
     def __init__(self, model_name: str) -> None:
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError as exc:
-            raise RuntimeError(
-                "sentence-transformers is required for the sentence-transformers ranker"
-            ) from exc
-
-        self._model = SentenceTransformer(model_name)
+        self._model = semantic_runtime.get_sentence_transformer_class()(model_name)
 
     def rank(self, query_text: str, candidates: list[Candidate]) -> dict[str, float]:
         if not candidates:

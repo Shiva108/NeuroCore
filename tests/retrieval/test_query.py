@@ -1,3 +1,4 @@
+from neurocore.core import semantic as semantic_runtime
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.interfaces.capture import capture_memory
 from neurocore.interfaces.query import query_memory
@@ -405,7 +406,7 @@ def test_query_memory_uses_semantic_ranker_when_provided():
     ]
 
 
-def test_query_memory_falls_back_when_semantic_backend_is_unavailable():
+def test_query_memory_falls_back_when_semantic_backend_is_unavailable(monkeypatch):
     config = NeuroCoreConfig(
         default_namespace="project-alpha",
         allowed_buckets=("research",),
@@ -414,6 +415,16 @@ def test_query_memory_falls_back_when_semantic_backend_is_unavailable():
         semantic_model_name="sentence-transformers/all-MiniLM-L6-v2",
     )
     store = InMemoryStore()
+    monkeypatch.setattr(
+        semantic_runtime,
+        "get_sentence_transformer_class",
+        lambda: (_ for _ in ()).throw(
+            RuntimeError(
+                "sentence-transformers is required for the sentence-transformers ranker"
+            )
+        ),
+    )
+
     capture_memory(
         {
             "namespace": "project-alpha",

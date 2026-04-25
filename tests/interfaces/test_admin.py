@@ -1,5 +1,6 @@
 import pytest
 
+from neurocore.core import semantic as semantic_runtime
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.interfaces.admin import delete_memory, reindex_memory, update_memory
 from neurocore.interfaces.capture import capture_memory
@@ -291,7 +292,9 @@ def test_admin_reindex_rebuilds_record_artifacts():
     assert response["failed"] == 0
 
 
-def test_admin_reindex_rebuilds_document_chunk_artifacts_and_reports_missing_semantic_backend():
+def test_admin_reindex_rebuilds_document_chunk_artifacts_and_reports_missing_semantic_backend(
+    monkeypatch,
+):
     store = InMemoryStore()
     config = NeuroCoreConfig(
         default_namespace="project-alpha",
@@ -303,6 +306,14 @@ def test_admin_reindex_rebuilds_document_chunk_artifacts_and_reports_missing_sem
         chunk_overlap_tokens=2,
         enable_admin_surface=True,
         semantic_backend="sentence-transformers",
+    )
+    monkeypatch.setattr(
+        semantic_runtime,
+        "sentence_transformers_status",
+        lambda: (
+            "unavailable",
+            "Semantic backend sentence-transformers is unavailable; artifacts were rebuilt in metadata-only mode.",
+        ),
     )
     capture = capture_memory(
         {

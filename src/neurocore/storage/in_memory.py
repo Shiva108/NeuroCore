@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
+from neurocore.core import semantic as semantic_runtime
 from neurocore.core.models import (
     MemoryChunk,
     MemoryDocument,
@@ -370,14 +371,7 @@ def _semantic_status(semantic_backend: str) -> tuple[str, str | None]:
     if semantic_backend == "none":
         return "metadata_only", None
     if semantic_backend == "sentence-transformers":
-        try:
-            import sentence_transformers  # noqa: F401
-        except ImportError:
-            return (
-                "unavailable",
-                "Semantic backend sentence-transformers is unavailable; artifacts were rebuilt in metadata-only mode.",
-            )
-        return "ready", None
+        return semantic_runtime.sentence_transformers_status()
     return (
         "unknown",
         f"Semantic backend {semantic_backend} is unknown; artifacts were rebuilt in metadata-only mode.",
