@@ -1,3 +1,9 @@
+.*
+docs/
+docs/ssd
+.claude/
+.github/
+
 # Virtual environments
 .venv/
 venv/

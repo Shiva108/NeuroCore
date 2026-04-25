@@ -10,10 +10,8 @@ library, a CLI entrypoint, FastAPI and MCP adapter factories, multiple storage
 backends, ingestion helpers for Slack and Discord payloads, and automated tests
 covering the main subsystem contracts.
 
-**Version:** `0.0`  
-Computed from Git history using the requested `0.[commit-count]` format. This
-working tree does not have a `HEAD` commit yet, so the effective commit count is
-`0`.
+**Version:** `0.1.0`  
+Declared in [pyproject.toml](pyproject.toml).
 
 ## Overview
 
@@ -142,8 +140,8 @@ papers, and `hackingagent` artifacts:
 python scripts/security_workflow.py --help
 ```
 
-See [docs/security-workflows.md](docs/security-workflows.md) for the practical
-bug bounty, pentest, red team, AI-security, and paper-tracking workflows.
+Use `python scripts/security_workflow.py presets` to list the built-in bug
+bounty, pentest, paper-tracking, and agent-memory workflows.
 
 ### Inspect the CLI
 
@@ -256,7 +254,6 @@ checks across Python 3.11, 3.12, and 3.13.
 ## Documentation
 
 - [Setup Guide](docs/setup.md)
-- [Security Workflows](docs/security-workflows.md)
 - [Security Guide](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [AI-Assisted Setup](docs/ai-assisted-setup.md)
