@@ -27,9 +27,6 @@ Main capabilities currently present in the repository:
 - Validate repository metadata and scan for obvious secret-like values with a
   built-in governance checker.
 
-The contract and design references in `docs/ssd/` remain part of the active
-source of truth for the system.
-
 ## Repository Structure
 
 ```text
@@ -46,11 +43,6 @@ source of truth for the system.
 │   └── runtime.py         # Runtime factories for stores, rankers, summarizers
 ├── tests/                 # Pytest suite grouped by subsystem
 ├── scripts/               # Local bootstrap and repo helper scripts
-├── docs/
-│   ├── ssd/               # Architecture, specification, plan, source matrix
-│   ├── setup.md           # Setup guide
-│   ├── security.md        # Security handling and publication guidance
-│   └── troubleshooting.md # Common setup and runtime issues
 ├── assets/screenshots/    # README visuals
 ├── .github/               # CI workflow, PR template, metadata schema
 ├── .claude/commands/      # AI-assisted slash-command prompts used in this repo
@@ -258,10 +250,6 @@ checks across Python 3.11, 3.12, and 3.13.
 - [Troubleshooting](docs/troubleshooting.md)
 - [AI-Assisted Setup](docs/ai-assisted-setup.md)
 - [Contributing Guide](CONTRIBUTING.md)
-- [SSD Architecture](docs/ssd/architecture.md)
-- [SSD Specification](docs/ssd/specification.md)
-- [SSD Implementation Plan](docs/ssd/implementation-plan.md)
-- [SSD Source Matrix](docs/ssd/source-matrix.md)
 
 ## Demo Screenshots
 
@@ -284,7 +272,7 @@ Dashboard mock:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow expectations. In short:
-review the SSD docs first, keep implementation and contracts aligned, and run
+review the SDD docs first, keep implementation and contracts aligned, and run
 the validation commands before opening a PR.
 
 ## License
