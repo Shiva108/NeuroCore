@@ -1,15 +1,10 @@
-.*
-.claude
-.github
-docs
-uv.lock
-
 # Virtual environments
 .venv/
 venv/
 
 # Python cache and build artifacts
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -20,6 +15,9 @@ __pycache__/
 
 # Local secrets and operator state
 .env
+.env.*
+!.env.example
+!.env.*.example
 token.json
 secrets.json
 preferences.json
@@ -33,3 +31,4 @@ output*.md
 # Editor and OS noise
 .DS_Store
 Thumbs.db
+docs/security-workflows.md
