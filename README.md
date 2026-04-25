@@ -134,6 +134,17 @@ The checked-in runnable entrypoint is the `neurocore` CLI defined in
 factories, but this repository does not currently ship a dedicated server-runner
 command for them.
 
+For security-focused local work, there is also a helper wrapper that reuses the
+repo virtual environment, loads `.env`, and exposes shortcuts for notes, files,
+papers, and `hackingagent` artifacts:
+
+```bash
+python scripts/security_workflow.py --help
+```
+
+See [docs/security-workflows.md](docs/security-workflows.md) for the practical
+bug bounty, pentest, red team, AI-security, and paper-tracking workflows.
+
 ### Inspect the CLI
 
 ```bash
@@ -245,6 +256,7 @@ checks across Python 3.11, 3.12, and 3.13.
 ## Documentation
 
 - [Setup Guide](docs/setup.md)
+- [Security Workflows](docs/security-workflows.md)
 - [Security Guide](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [AI-Assisted Setup](docs/ai-assisted-setup.md)

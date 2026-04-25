@@ -1,3 +1,9 @@
+.*
+.claude
+.github
+docs
+uv.lock
+
 # Virtual environments
 .venv/
 venv/
