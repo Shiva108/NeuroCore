@@ -1,0 +1,24 @@
+{
+  "name": "Ops Weekly Memory Report",
+  "category": "recipes",
+  "description": "Opinionated workflow for generating weekly operations reports on top of NeuroCore query results.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+"
+    ]
+  },
+  "tags": [
+    "ops",
+    "weekly",
+    "reporting",
+    "recipe"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "20 minutes",
+  "curation": "open"
+}

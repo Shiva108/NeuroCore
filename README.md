@@ -22,10 +22,16 @@ Main capabilities currently present in the repository:
 - Route storage to in-memory, SQLite, or Postgres-backed primary and sealed
   stores.
 - Expose the same core behavior through library, CLI, HTTP, and MCP surfaces.
+- Run a FastAPI-first reference app and MCP server through official CLI serve
+  commands.
 - Gate higher-risk or optional surfaces such as admin operations, dashboard
   views, background summarization, and multi-model consensus via configuration.
+- Provide reporting helpers for building review and report workflows on top of
+  query results.
 - Validate repository metadata and scan for obvious secret-like values with a
   built-in governance checker.
+- Provide ecosystem contribution surfaces for recipes, skills, integrations,
+  dashboards, schemas, primitives, and curated extensions.
 
 ## Repository Structure
 
@@ -37,6 +43,7 @@ Main capabilities currently present in the repository:
 │   ├── governance/        # Repository contract and secret-scan validator
 │   ├── ingest/            # Chunking, normalization, and dedup helpers
 │   ├── interfaces/        # Public capture, query, ingest, admin, dashboard APIs
+│   ├── reporting/         # Report context builders and consensus reporting helpers
 │   ├── retrieval/         # Query engine and rankers
 │   ├── storage/           # In-memory, SQLite, Postgres, and routed stores
 │   ├── summarization/     # Background and consensus summarization logic
@@ -73,7 +80,8 @@ python scripts/bootstrap.py
 
 This creates or reuses `.venv`, installs `.[dev,semantic]`, writes a
 security-oriented `.env`, copies the local-only config templates, creates
-`data/`, and runs `pytest` plus the repo validator.
+`data/`, runs `pytest` plus the repo validator, and prints a readiness summary
+for semantic, query, and report support.
 
 If you want a small guided flow for namespace and verification choices:
 
@@ -121,19 +129,36 @@ python -m pip install -e ".[dev,semantic]"
 
 The checked-in runnable entrypoint is the `neurocore` CLI defined in
 `pyproject.toml`. HTTP and MCP support are available as Python adapter
-factories, but this repository does not currently ship a dedicated server-runner
-command for them.
+factories and through dedicated serve commands.
+
+For repo checkouts, prefer the checkout-safe wrappers:
+
+```bash
+python scripts/neurocore_checkout.py --help
+python scripts/validate_checkout.py
+```
 
 For security-focused local work, there is also a helper wrapper that reuses the
 repo virtual environment, loads `.env`, and exposes shortcuts for notes, files,
 papers, and `hackingagent` artifacts:
 
 ```bash
-python scripts/security_workflow.py --help
+./.venv/bin/python scripts/security_workflow.py --help
 ```
 
-Use `python scripts/security_workflow.py presets` to list the built-in bug
+Use `./.venv/bin/python scripts/security_workflow.py presets` to list the built-in bug
 bounty, pentest, paper-tracking, and agent-memory workflows.
+
+Two local readiness tiers matter:
+
+- query-ready: capture and retrieval work with your configured storage and semantic backend
+- full report-ready: consensus reporting also works because the local-only consensus provider values are set
+
+Check the current state at any time:
+
+```bash
+./.venv/bin/python scripts/security_workflow.py capabilities
+```
 
 ### Inspect the CLI
 
@@ -156,6 +181,20 @@ neurocore capture --request-json '{"bucket":"recon","content":"Initial recon not
 neurocore query --request-json '{"query_text":"recon","allowed_buckets":["recon","findings"],"sensitivity_ceiling":"restricted"}'
 ```
 
+### Generate a consensus report
+
+Consensus reporting must be enabled first with
+`NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS=true` plus the configured provider,
+model names, base URL, and API key. For local development, you can start the
+bundled mock provider with `./.venv/bin/python scripts/mock_openai_compatible.py`.
+
+If you want a real external provider instead of the local mock, start from
+[.env.reporting-provider.example](./.env.reporting-provider.example).
+
+```bash
+neurocore report consensus --request-json '{"objective":"Generate a pentest review report.","query_request":{"query_text":"ssrf findings","allowed_buckets":["findings","reports"],"sensitivity_ceiling":"restricted"}}'
+```
+
 ### Ingest an external event payload
 
 ```bash
@@ -163,6 +202,9 @@ neurocore ingest slack --request-json '{"type":"event_callback","team_id":"T123"
 ```
 
 The CLI also supports `ingest discord`.
+
+Optional ingest profile defaults can be loaded from a JSON file by setting
+`NEUROCORE_INGEST_PROFILE_PATH=/path/to/ingest-profiles.json`.
 
 ### Run background summaries
 
@@ -181,6 +223,13 @@ Admin operations are gated behind `NEUROCORE_ENABLE_ADMIN_SURFACE=true`.
 neurocore admin reindex --request-json '{"ids":["rec-1"],"scope":"records"}'
 ```
 
+Audit stored memory for secret-like values and review non-mutating remediation
+candidates:
+
+```bash
+neurocore admin audit --request-json '{"namespace":"project-alpha","allowed_buckets":["research"]}'
+```
+
 ### Use the adapter factories from Python
 
 FastAPI app factory:
@@ -197,6 +246,22 @@ MCP server factory:
 from neurocore.adapters.mcp_server import create_mcp_server
 
 server = create_mcp_server()
+```
+
+### Run the reference app
+
+Enable the HTTP adapter in your environment and run:
+
+```bash
+python scripts/neurocore_checkout.py serve http --host 127.0.0.1 --port 8000
+```
+
+### Run the MCP server
+
+Enable the MCP adapter in your environment and run:
+
+```bash
+python scripts/neurocore_checkout.py serve mcp --transport stdio
 ```
 
 ## Configuration
@@ -237,7 +302,7 @@ Validation commands:
 black --check src tests
 flake8 src tests
 pytest
-python -m neurocore.governance.validation
+python scripts/validate_checkout.py
 ```
 
 The GitHub Actions workflow in `.github/workflows/repo-gate.yml` runs those same
@@ -246,10 +311,28 @@ checks across Python 3.11, 3.12, and 3.13.
 ## Documentation
 
 - [Setup Guide](docs/setup.md)
+- [Reference Stack](docs/reference-stack.md)
+- [Hosted Stack](docs/hosted-stack.md)
 - [Security Guide](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [AI-Assisted Setup](docs/ai-assisted-setup.md)
+- [OB1 Gap Report](docs/ob1-gap-report.md)
 - [Contributing Guide](CONTRIBUTING.md)
+
+## Ecosystem Surfaces
+
+- [Extensions](extensions/README.md)
+- [Primitives](primitives/README.md)
+- [Recipes](recipes/README.md)
+- [Skills](skills/README.md)
+- [Dashboards](dashboards/README.md)
+- [Integrations](integrations/README.md)
+- [Schemas](schemas/README.md)
+
+Recommended runnable examples:
+
+- [Local Quickstart Recipe](recipes/quickstart-memory-capture/README.md)
+- [Hosted Stack Quickstart Recipe](recipes/hosted-stack-quickstart/README.md)
 
 ## Demo Screenshots
 
@@ -267,7 +350,7 @@ Dashboard mock:
   real database URLs.
 - Treat `secrets.json.example` and `preferences.json.example` as local-only
   templates.
-- Run `python -m neurocore.governance.validation` before publishing changes.
+- Run `python scripts/validate_checkout.py` before publishing changes.
 
 ## Contributing
 

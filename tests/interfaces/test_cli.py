@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from neurocore.adapters.cli import main
+from neurocore.adapters import cli as cli_module
+from neurocore.adapters.cli import main, run_http_server, run_mcp_server
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.storage.in_memory import InMemoryStore
 
@@ -89,6 +90,19 @@ def test_cli_admin_commands_respect_admin_toggle():
             stdout=io.StringIO(),
         )
 
+    with pytest.raises(PermissionError, match="disabled"):
+        main(
+            [
+                "admin",
+                "audit",
+                "--request-json",
+                json.dumps({}),
+            ],
+            store=store,
+            config=config,
+            stdout=io.StringIO(),
+        )
+
 
 def test_cli_ingest_and_summarize_commands_use_library_contracts():
     store = InMemoryStore()
@@ -139,3 +153,199 @@ def test_cli_ingest_and_summarize_commands_use_library_contracts():
     assert exit_code == 0
     summary_response = json.loads(stdout.getvalue())
     assert summary_response["processed"] >= 1
+
+
+def test_cli_admin_audit_command_returns_findings():
+    store = InMemoryStore()
+    config = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_admin_surface=True,
+    )
+
+    main(
+        [
+            "capture",
+            "--request-json",
+            json.dumps(
+                {
+                    "namespace": "project-alpha",
+                    "bucket": "research",
+                    "sensitivity": "standard",
+                    "content": "API_KEY=super-secret-value",
+                    "content_format": "markdown",
+                    "source_type": "note",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=io.StringIO(),
+    )
+
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "admin",
+            "audit",
+            "--request-json",
+            json.dumps(
+                {
+                    "namespace": "project-alpha",
+                    "allowed_buckets": ["research"],
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["findings"]
+
+
+def test_cli_report_consensus_command_returns_report_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    called: dict[str, object] = {}
+
+    def fake_generate_consensus_report(
+        request, *, store, config, semantic_ranker=None, reporter=None
+    ):
+        called["request"] = request
+        return {
+            "report": "## Overview\nReady.",
+            "agreement_score": 1.0,
+            "model_outputs": {"model-a": "## Overview\nReady."},
+            "metadata": {"objective": request["objective"]},
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "generate_consensus_report",
+        fake_generate_consensus_report,
+    )
+
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "report",
+            "consensus",
+            "--request-json",
+            json.dumps(
+                {
+                    "objective": "Generate a review report.",
+                    "context_markdown": "Retrieved context",
+                }
+            ),
+        ],
+        store=InMemoryStore(),
+        config=NeuroCoreConfig(
+            default_namespace="project-alpha",
+            allowed_buckets=("research",),
+            default_sensitivity="standard",
+            enable_multi_model_consensus=True,
+        ),
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["report"].startswith("## Overview")
+    assert called["request"]["objective"] == "Generate a review report."
+
+
+def test_cli_report_consensus_command_respects_consensus_toggle():
+    with pytest.raises(PermissionError, match="Reporting is disabled"):
+        main(
+            [
+                "report",
+                "consensus",
+                "--request-json",
+                json.dumps(
+                    {
+                        "objective": "Generate a review report.",
+                        "context_markdown": "Retrieved context",
+                    }
+                ),
+            ],
+            store=InMemoryStore(),
+            config=build_config(),
+            stdout=io.StringIO(),
+        )
+
+
+def test_cli_serve_http_command_invokes_http_runner(monkeypatch: pytest.MonkeyPatch):
+    called: dict[str, object] = {}
+
+    def fake_run_http_server(*, store, config, host, port):
+        called["store"] = store
+        called["config"] = config
+        called["host"] = host
+        called["port"] = port
+
+    monkeypatch.setattr(cli_module, "run_http_server", fake_run_http_server)
+
+    exit_code = main(
+        ["serve", "http", "--host", "0.0.0.0", "--port", "9000"],
+        store=InMemoryStore(),
+        config=build_config(),
+        stdout=io.StringIO(),
+    )
+
+    assert exit_code == 0
+    assert called["host"] == "0.0.0.0"
+    assert called["port"] == 9000
+
+
+def test_cli_serve_mcp_command_invokes_mcp_runner(monkeypatch: pytest.MonkeyPatch):
+    called: dict[str, object] = {}
+
+    def fake_run_mcp_server(*, store, config, transport, mount_path):
+        called["store"] = store
+        called["config"] = config
+        called["transport"] = transport
+        called["mount_path"] = mount_path
+
+    monkeypatch.setattr(cli_module, "run_mcp_server", fake_run_mcp_server)
+
+    exit_code = main(
+        [
+            "serve",
+            "mcp",
+            "--transport",
+            "streamable-http",
+            "--mount-path",
+            "/mcp",
+        ],
+        store=InMemoryStore(),
+        config=build_config(),
+        stdout=io.StringIO(),
+    )
+
+    assert exit_code == 0
+    assert called["transport"] == "streamable-http"
+    assert called["mount_path"] == "/mcp"
+
+
+def test_run_http_server_requires_http_adapter_toggle():
+    with pytest.raises(PermissionError, match="HTTP adapter is disabled"):
+        run_http_server(
+            store=InMemoryStore(),
+            config=build_config(),
+            host="127.0.0.1",
+            port=8000,
+        )
+
+
+def test_run_mcp_server_requires_mcp_adapter_toggle():
+    with pytest.raises(PermissionError, match="MCP adapter is disabled"):
+        run_mcp_server(
+            store=InMemoryStore(),
+            config=build_config(),
+            transport="stdio",
+            mount_path=None,
+        )

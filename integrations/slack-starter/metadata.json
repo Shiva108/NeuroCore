@@ -1,0 +1,25 @@
+{
+  "name": "Slack Starter Integration",
+  "category": "integrations",
+  "description": "Starter pattern for Slack event and slash-style review flows using NeuroCore ingest and query interfaces.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+",
+      "Slack app/webhook bridge"
+    ]
+  },
+  "tags": [
+    "slack",
+    "ingest",
+    "slash-flow",
+    "reporting"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "25 minutes",
+  "curation": "open"
+}

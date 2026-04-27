@@ -1,0 +1,23 @@
+{
+  "name": "Chat Capture Integration",
+  "category": "integrations",
+  "description": "Canonical Slack and Discord capture integration pattern built on NeuroCore ingest interfaces.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+"
+    ]
+  },
+  "tags": [
+    "slack",
+    "discord",
+    "ingest"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "20 minutes",
+  "curation": "open"
+}

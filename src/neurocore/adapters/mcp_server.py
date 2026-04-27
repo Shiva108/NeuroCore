@@ -5,11 +5,17 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from neurocore.core.config import NeuroCoreConfig, load_config
-from neurocore.interfaces.admin import delete_memory, reindex_memory, update_memory
+from neurocore.interfaces.admin import (
+    audit_memory,
+    delete_memory,
+    reindex_memory,
+    update_memory,
+)
 from neurocore.interfaces.capture import capture_memory
 from neurocore.interfaces.dashboard import build_dashboard_data
 from neurocore.interfaces.ingest import ingest_discord_event, ingest_slack_event
 from neurocore.interfaces.query import query_memory
+from neurocore.interfaces.reporting import generate_consensus_report
 from neurocore.interfaces.summaries import run_background_summaries
 from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
@@ -59,6 +65,17 @@ def create_mcp_server(
             name="run_background_summaries",
             description="Run background document summarization.",
         )
+    if config.enable_multi_model_consensus:
+        server.add_tool(
+            lambda request: generate_consensus_report(
+                request,
+                store=store,
+                config=config,
+                semantic_ranker=semantic_ranker,
+            ),
+            name="generate_consensus_report",
+            description="Generate a multi-model consensus report from NeuroCore context.",
+        )
     if config.enable_dashboard:
         server.add_tool(
             lambda request: build_dashboard_data(store=store, config=config),
@@ -80,6 +97,11 @@ def create_mcp_server(
             lambda request: reindex_memory(request, store=store, config=config),
             name="reindex_memory",
             description="Reindex NeuroCore retrieval artifacts.",
+        )
+        server.add_tool(
+            lambda request: audit_memory(request, store=store, config=config),
+            name="audit_memory",
+            description="Audit NeuroCore memory for secret-like values.",
         )
 
     return server

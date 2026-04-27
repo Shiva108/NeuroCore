@@ -41,6 +41,15 @@ def create_repo_scaffold(tmp_path: Path) -> None:
     )
     (tmp_path / "secrets.json.example").write_text("{}", encoding="utf-8")
     (tmp_path / "preferences.json.example").write_text("{}", encoding="utf-8")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "security_workflow.py").write_text(
+        "def print_readiness_summary(*, repo_root, env, stdout):\n"
+        "    print('Readiness summary: semantic=ready; query=ready; report=not ready', file=stdout)\n"
+        "    print('Report prerequisites still missing:', file=stdout)\n"
+        "    print('- Consensus reporting disabled', file=stdout)\n"
+        "    print('Local-only report generation can use the bundled mock provider at http://127.0.0.1:8787/v1.', file=stdout)\n",
+        encoding="utf-8",
+    )
 
 
 class FakeRunner:
@@ -91,6 +100,8 @@ def test_bootstrap_creates_local_setup_files_and_runs_verification(tmp_path: Pat
         "neurocore.governance.validation",
     ] in commands
     assert "NeuroCore bootstrap is complete." in stdout.getvalue()
+    assert "Readiness summary: semantic=ready; query=ready; report=not ready" in stdout.getvalue()
+    assert "mock provider at http://127.0.0.1:8787/v1" in stdout.getvalue()
 
 
 def test_bootstrap_preserves_existing_env_by_default(tmp_path: Path):

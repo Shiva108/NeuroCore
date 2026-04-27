@@ -1,32 +1,41 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is currently in a docs-first planning phase. There are no application source files yet, and `docs/ssd/` is the active implementation source of truth. Keep the layout predictable as code is added:
+This repository contains a working Python implementation, and `docs/ssd/`
+remains the active contract source of truth for the core system. Keep the
+layout predictable as code, docs, and ecosystem modules evolve:
 
 - `src/` for application code
 - `tests/` for automated tests
 - `assets/` for static files such as images or sample data
 - `docs/` for design notes, architecture decisions, and onboarding material
+- `extensions/`, `primitives/`, `recipes/`, `skills/`, `dashboards/`,
+  `integrations/`, and `schemas/` for ecosystem contributions
 - `.claude/commands/` for reusable slash-command prompt files kept out of the repo root
 
 Current repo-specific notes:
 
 - keep `docs/ssd/` aligned with any architectural or scope change
+- keep ecosystem contribution docs and metadata aligned with the current runtime
+  behavior
 - keep `.claude/commands/` prompts discovery-first and consistent with repo reality
 - do not introduce alternative top-level planning folders when `docs/` already covers that need
 
 Prefer small, focused modules. Mirror `src/` paths inside `tests/` where practical, for example `src/api/client.js` and `tests/api/test_client.js`.
 
 ## Build, Test, and Development Commands
-No build, test, or local run commands are defined in this repository yet. When adding tooling, expose one clear entrypoint per task and document it here.
-
-Until a runtime is selected, docs-only and prompt-only changes normally have no automated validation beyond a careful consistency pass.
+Core entrypoints are already defined in this repository. Prefer documented
+commands instead of ad hoc scripts.
 
 Recommended patterns:
 
-- `make dev` or `npm run dev` to start a local development workflow
-- `make test` or `pytest` / `npm test` to run the full test suite
-- `make lint` or `npm run lint` to run formatting and static checks
+- `python scripts/bootstrap.py` for the fastest local setup
+- `make test` or `pytest` to run the test suite
+- `make lint` to run formatting and static checks
+- `make validate` or `python -m neurocore.governance.validation` to run the
+  repo contract checks
+- `neurocore serve http` and `neurocore serve mcp` for the blessed local
+  runtime paths
 
 Avoid ad hoc one-off scripts when a standard project command can be added instead.
 
@@ -43,7 +52,8 @@ If you add a formatter or linter, wire it into the repository entrypoints before
 Place tests under `tests/` and name them after the behavior they verify, such as `test_auth_login.py` or `user-form.test.ts`. Add tests with every behavior change or bug fix. Prefer fast, deterministic tests over network-dependent checks.
 
 ## Commit & Pull Request Guidelines
-This workspace is not initialized as a Git repository yet, so no established commit convention can be inferred. Use Conventional Commits once version control is initialized, for example `feat: add API client` or `fix: handle empty config`.
+Use Conventional Commits for repository history, for example `feat: add API
+client` or `fix: handle empty config`.
 
 PRs should include:
 

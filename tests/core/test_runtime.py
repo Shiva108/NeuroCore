@@ -3,6 +3,7 @@ import pytest
 
 from neurocore.runtime import (
     build_production_backend_choice,
+    build_reporter,
     build_store,
     build_summarizer,
 )
@@ -85,3 +86,33 @@ def test_build_summarizer_rejects_duplicate_model_names():
 
     with pytest.raises(ValueError, match="unique model names"):
         build_summarizer(config)
+
+
+def test_build_summarizer_requires_consensus_api_key():
+    config = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_multi_model_consensus=True,
+        consensus_provider="openai_compatible",
+        consensus_model_names=("model-a", "model-b"),
+        consensus_base_url="https://api.example.test/v1",
+    )
+
+    with pytest.raises(ValueError, match="consensus API key"):
+        build_summarizer(config)
+
+
+def test_build_reporter_requires_consensus_api_key():
+    config = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_multi_model_consensus=True,
+        consensus_provider="openai_compatible",
+        consensus_model_names=("model-a", "model-b"),
+        consensus_base_url="https://api.example.test/v1",
+    )
+
+    with pytest.raises(ValueError, match="consensus API key"):
+        build_reporter(config)

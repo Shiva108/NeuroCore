@@ -38,6 +38,7 @@ async def test_mcp_server_registers_admin_tools_when_enabled():
             enable_admin_surface=True,
             enable_dashboard=True,
             enable_background_summarization=True,
+            enable_multi_model_consensus=True,
         ),
     )
 
@@ -49,10 +50,12 @@ async def test_mcp_server_registers_admin_tools_when_enabled():
         "ingest_slack_event",
         "ingest_discord_event",
         "run_background_summaries",
+        "generate_consensus_report",
         "dashboard_data",
         "update_memory",
         "delete_memory",
         "reindex_memory",
+        "audit_memory",
     }.issubset(tool_names)
 
 
@@ -76,4 +79,5 @@ async def test_mcp_server_keeps_optional_summary_and_dashboard_tools_gated():
     assert "query_memory" in tool_names
     assert "update_memory" in tool_names
     assert "run_background_summaries" not in tool_names
+    assert "generate_consensus_report" not in tool_names
     assert "dashboard_data" not in tool_names

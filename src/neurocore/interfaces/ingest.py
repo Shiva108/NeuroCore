@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import re
 
 from neurocore.core.config import NeuroCoreConfig
+from neurocore.ingest.profiles import resolve_ingest_profile
 from neurocore.interfaces.capture import capture_memory
 from neurocore.storage.base import BaseStore
 
@@ -28,6 +29,17 @@ def ingest_slack_event(
     if event.get("subtype"):
         return {"source": "slack", "ignored": True, "reason": "unsupported_subtype"}
 
+    context = {
+        "team_id": payload.get("team_id"),
+        "channel_id": event.get("channel"),
+        "user_id": event.get("user"),
+    }
+    profile = resolve_ingest_profile(
+        source="slack",
+        context=context,
+        configured_profiles=config.ingest_profiles,
+    )
+    defaults = _profile_defaults(profile)
     capture = capture_memory(
         {
             "namespace": _external_namespace(
@@ -36,9 +48,15 @@ def ingest_slack_event(
                 prefix="slack",
                 fallback=config.default_namespace,
             ),
-            "bucket": str(payload.get("bucket") or config.allowed_buckets[0]),
+            "bucket": str(
+                payload.get("bucket")
+                or defaults.get("bucket")
+                or config.allowed_buckets[0]
+            ),
             "sensitivity": str(
-                payload.get("sensitivity") or config.default_sensitivity
+                payload.get("sensitivity")
+                or defaults.get("sensitivity")
+                or config.default_sensitivity
             ),
             "content": str(event.get("text") or ""),
             "content_format": "markdown",
@@ -51,8 +69,9 @@ def ingest_slack_event(
                 "channel_id": event.get("channel"),
                 "user_id": event.get("user"),
                 "event_type": event.get("type"),
+                **_profile_metadata(profile),
             },
-            "tags": ["slack"],
+            "tags": _merge_tags(["slack"], defaults.get("tags", [])),
             "title": f"Slack {event.get('channel')}",
         },
         store=store,
@@ -75,6 +94,17 @@ def ingest_discord_event(
         return {"source": "discord", "ignored": True, "reason": "empty_message"}
 
     author = dict(data.get("author", {}))
+    context = {
+        "guild_id": data.get("guild_id"),
+        "channel_id": data.get("channel_id"),
+        "author_id": author.get("id"),
+    }
+    profile = resolve_ingest_profile(
+        source="discord",
+        context=context,
+        configured_profiles=config.ingest_profiles,
+    )
+    defaults = _profile_defaults(profile)
     capture = capture_memory(
         {
             "namespace": _external_namespace(
@@ -83,9 +113,15 @@ def ingest_discord_event(
                 prefix="discord",
                 fallback=config.default_namespace,
             ),
-            "bucket": str(payload.get("bucket") or config.allowed_buckets[0]),
+            "bucket": str(
+                payload.get("bucket")
+                or defaults.get("bucket")
+                or config.allowed_buckets[0]
+            ),
             "sensitivity": str(
-                payload.get("sensitivity") or config.default_sensitivity
+                payload.get("sensitivity")
+                or defaults.get("sensitivity")
+                or config.default_sensitivity
             ),
             "content": content,
             "content_format": "markdown",
@@ -98,8 +134,9 @@ def ingest_discord_event(
                 "channel_id": data.get("channel_id"),
                 "author_id": author.get("id"),
                 "author_username": author.get("username"),
+                **_profile_metadata(profile),
             },
-            "tags": ["discord"],
+            "tags": _merge_tags(["discord"], defaults.get("tags", [])),
             "title": f"Discord {data.get('channel_id')}",
         },
         store=store,
@@ -132,3 +169,31 @@ def _external_namespace(
     if not normalized:
         return fallback
     return f"{prefix}-{normalized}"
+
+
+def _profile_defaults(profile: dict[str, object] | None) -> dict[str, object]:
+    if profile is None:
+        return {}
+    defaults = profile.get("defaults", {})
+    return defaults if isinstance(defaults, dict) else {}
+
+
+def _profile_metadata(profile: dict[str, object] | None) -> dict[str, object]:
+    if profile is None:
+        return {}
+    metadata = {"matched_ingest_profile": profile["name"]}
+    parsing_hints = profile.get("parsing_hints", {})
+    if isinstance(parsing_hints, dict) and parsing_hints:
+        metadata["ingest_parsing_hints"] = parsing_hints
+    return metadata
+
+
+def _merge_tags(base_tags: list[str], profile_tags: object) -> list[str]:
+    merged = list(base_tags)
+    if not isinstance(profile_tags, list):
+        return merged
+    for tag in profile_tags:
+        value = str(tag).strip()
+        if value and value not in merged:
+            merged.append(value)
+    return merged

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from neurocore.ingest.profiles import validate_ingest_profiles
 
 BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 VALID_SENSITIVITIES = ("standard", "restricted", "sealed")
@@ -52,6 +55,10 @@ class NeuroCoreConfig:
     production_database_url: str | None = None
     production_sealed_database_url: str | None = None
     dedup_merge_metadata: bool = True
+    ingest_profile_path: str | None = None
+    ingest_profiles: dict[str, object] = field(
+        default_factory=lambda: {"version": "1", "profiles": []}
+    )
 
 
 def load_config(env: dict[str, str] | None = None) -> NeuroCoreConfig:
@@ -62,6 +69,8 @@ def load_config(env: dict[str, str] | None = None) -> NeuroCoreConfig:
     default_sensitivity = _parse_sensitivity(
         _required(values, "NEUROCORE_DEFAULT_SENSITIVITY")
     )
+
+    ingest_profile_path = _parse_optional_string(values, "NEUROCORE_INGEST_PROFILE_PATH")
 
     return NeuroCoreConfig(
         default_namespace=default_namespace,
@@ -128,6 +137,10 @@ def load_config(env: dict[str, str] | None = None) -> NeuroCoreConfig:
         ),
         dedup_merge_metadata=_parse_bool(
             values, "NEUROCORE_DEDUP_MERGE_METADATA", True
+        ),
+        ingest_profile_path=ingest_profile_path,
+        ingest_profiles=_load_ingest_profiles(
+            ingest_profile_path, allowed_buckets=allowed_buckets
         ),
     )
 
@@ -214,3 +227,27 @@ def _parse_csv(values: dict[str, str], key: str) -> tuple[str, ...]:
     if raw is None or not raw.strip():
         return ()
     return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
+def _load_ingest_profiles(
+    profile_path: str | None, *, allowed_buckets: tuple[str, ...]
+) -> dict[str, object]:
+    """Load and validate optional ingest profile configuration."""
+    if profile_path is None:
+        return {"version": "1", "profiles": []}
+    try:
+        with open(profile_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except OSError as exc:
+        raise ConfigError(
+            f"Failed to read ingest profile configuration: {profile_path}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"Invalid ingest profile JSON in {profile_path}: {exc.msg}"
+        ) from exc
+
+    try:
+        return validate_ingest_profiles(payload, allowed_buckets=allowed_buckets)
+    except ValueError as exc:
+        raise ConfigError(f"Invalid ingest profile configuration: {exc}") from exc

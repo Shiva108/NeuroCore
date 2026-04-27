@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from neurocore.core.config import ConfigError, NeuroCoreConfig, load_config
@@ -118,6 +121,91 @@ def test_load_config_accepts_extended_backend_and_adapter_settings(monkeypatch):
     assert config.production_backend_provider == "neon"
     assert config.production_database_url == "postgresql://primary"
     assert config.production_sealed_database_url == "postgresql://sealed"
+
+
+def test_load_config_accepts_ingest_profile_path_and_parses_profiles(tmp_path):
+    profile_path = tmp_path / "ingest-profiles.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "version": "1",
+                "profiles": [
+                    {
+                        "name": "slack-default",
+                        "source": "slack",
+                        "match": {"team_id": "T123"},
+                        "defaults": {
+                            "bucket": "planning",
+                            "tags": ["slack-profile"],
+                            "sensitivity": "restricted",
+                        },
+                        "parsing_hints": {"mode": "ops"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(
+        env=minimal_env(
+            NEUROCORE_INGEST_PROFILE_PATH=str(profile_path),
+        )
+    )
+
+    assert config.ingest_profile_path == str(profile_path)
+    assert config.ingest_profiles["version"] == "1"
+    assert config.ingest_profiles["profiles"][0]["name"] == "slack-default"
+
+
+def test_load_config_rejects_invalid_ingest_profile_json(tmp_path):
+    profile_path = tmp_path / "ingest-profiles.json"
+    profile_path.write_text("{invalid json", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="ingest profile"):
+        load_config(
+            env=minimal_env(
+                NEUROCORE_INGEST_PROFILE_PATH=str(profile_path),
+            )
+        )
+
+
+def test_load_config_rejects_invalid_ingest_profile_structure(tmp_path):
+    profile_path = tmp_path / "ingest-profiles.json"
+    profile_path.write_text(
+        json.dumps({"version": "1", "profiles": [{"name": "broken"}]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="ingest profile"):
+        load_config(
+            env=minimal_env(
+                NEUROCORE_INGEST_PROFILE_PATH=str(profile_path),
+            )
+        )
+
+
+def test_checked_in_ingest_profile_example_matches_current_schema():
+    profile_path = (
+        Path(__file__).resolve().parents[2] / "ingest-profiles.json.example"
+    )
+
+    config = load_config(
+        env=minimal_env(
+            NEUROCORE_ALLOWED_BUCKETS="research,planning,ops,findings,reports",
+            NEUROCORE_INGEST_PROFILE_PATH=str(profile_path),
+        )
+    )
+
+    assert config.ingest_profile_path == str(profile_path)
+    assert config.ingest_profiles["version"] == "1"
+    profiles = config.ingest_profiles["profiles"]
+    assert len(profiles) == 2
+    assert {profile["source"] for profile in profiles} == {"slack", "discord"}
+    assert {profile["defaults"]["bucket"] for profile in profiles} == {
+        "ops",
+        "findings",
+    }
 
 
 def test_load_config_rejects_invalid_storage_backend(monkeypatch):

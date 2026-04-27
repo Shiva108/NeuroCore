@@ -1,0 +1,23 @@
+{
+  "name": "Quickstart Memory Capture",
+  "category": "recipes",
+  "description": "Capture a note, query it back, and review it in the NeuroCore reference app.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+"
+    ]
+  },
+  "tags": [
+    "capture",
+    "query",
+    "reference-app"
+  ],
+  "difficulty": "beginner",
+  "estimated_time": "10 minutes",
+  "curation": "open"
+}

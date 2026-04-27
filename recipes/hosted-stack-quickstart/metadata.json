@@ -1,0 +1,28 @@
+{
+  "name": "Hosted Stack Quickstart",
+  "category": "recipes",
+  "description": "Run the blessed hosted NeuroCore profile and validate capture/query over the existing HTTP and MCP contracts.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+",
+      "curl"
+    ],
+    "services": [
+      "Postgres-compatible database"
+    ]
+  },
+  "tags": [
+    "hosted",
+    "reference-stack",
+    "http",
+    "mcp"
+  ],
+  "difficulty": "beginner",
+  "estimated_time": "15 minutes",
+  "curation": "open"
+}

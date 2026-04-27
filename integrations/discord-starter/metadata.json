@@ -1,0 +1,25 @@
+{
+  "name": "Discord Starter Integration",
+  "category": "integrations",
+  "description": "Starter pattern for Discord event and slash-style review flows using NeuroCore ingest and query interfaces.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+",
+      "Discord bot gateway"
+    ]
+  },
+  "tags": [
+    "discord",
+    "ingest",
+    "slash-flow",
+    "reporting"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "25 minutes",
+  "curation": "open"
+}

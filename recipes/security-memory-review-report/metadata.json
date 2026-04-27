@@ -1,0 +1,24 @@
+{
+  "name": "Security Memory Review Report",
+  "category": "recipes",
+  "description": "Opinionated workflow for generating security-oriented memory review reports on top of NeuroCore query results.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+"
+    ]
+  },
+  "tags": [
+    "security",
+    "reporting",
+    "consensus",
+    "recipe"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "20 minutes",
+  "curation": "open"
+}

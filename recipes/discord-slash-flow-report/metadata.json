@@ -1,0 +1,25 @@
+{
+  "name": "Discord Slash Flow Report",
+  "category": "recipes",
+  "description": "Example slash-style Discord workflow that captures context, queries memory, and generates a consensus review report.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+",
+      "Discord bot gateway"
+    ]
+  },
+  "tags": [
+    "discord",
+    "recipe",
+    "slash-flow",
+    "reporting"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "30 minutes",
+  "curation": "open"
+}

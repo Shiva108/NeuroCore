@@ -2,7 +2,12 @@ import pytest
 
 from neurocore.core import semantic as semantic_runtime
 from neurocore.core.config import NeuroCoreConfig
-from neurocore.interfaces.admin import delete_memory, reindex_memory, update_memory
+from neurocore.interfaces.admin import (
+    audit_memory,
+    delete_memory,
+    reindex_memory,
+    update_memory,
+)
 from neurocore.interfaces.capture import capture_memory
 from neurocore.storage.in_memory import InMemoryStore
 
@@ -42,6 +47,9 @@ def test_admin_operations_are_disabled_by_default():
 
     with pytest.raises(PermissionError, match="disabled"):
         reindex_memory({"ids": ["rec-1"], "scope": "records"}, store, config)
+
+    with pytest.raises(PermissionError, match="disabled"):
+        audit_memory({}, store, config)
 
 
 def test_admin_update_and_delete_emit_audit_events():
@@ -256,6 +264,227 @@ def test_admin_reindex_reports_processed_ids_without_changing_identity():
     assert response["failed"] == 1
     assert response["warnings"] == []
     assert store.get_record(capture["id"]) is not None
+
+
+def test_admin_audit_finds_secret_like_content_in_records_and_returns_actions():
+    store = InMemoryStore()
+    config = enabled_config()
+
+    capture = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "API_KEY=super-secret-value",
+            "content_format": "markdown",
+            "source_type": "note",
+            "title": "Leaky note",
+            "metadata": {"source": "manual"},
+        },
+        store=store,
+        config=config,
+    )
+
+    response = audit_memory(
+        {
+            "namespace": "project-alpha",
+            "allowed_buckets": ["research"],
+            "actor": "tester",
+        },
+        store,
+        config,
+    )
+
+    assert response["findings"]
+    assert response["findings"][0]["item_id"] == capture["id"]
+    assert response["findings"][0]["field"] == "content"
+    assert response["candidate_actions"]
+    assert {action["action"] for action in response["candidate_actions"]} == {
+        "manual_redact_content",
+        "soft_delete_item",
+    }
+    assert store.get_record(capture["id"]) is not None
+
+
+def test_admin_audit_finds_secret_like_content_in_documents():
+    store = InMemoryStore()
+    config = enabled_config()
+
+    capture = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "sealed",
+            "content": (
+                "Sentence one explains the system.\n"
+                "SECRET_KEY=super-secret-value\n"
+                "Sentence three covers isolation policy."
+            ),
+            "content_format": "markdown",
+            "source_type": "report",
+            "title": "Leaky document",
+        },
+        store=store,
+        config=config,
+    )
+
+    response = audit_memory(
+        {
+            "namespace": "project-alpha",
+            "allowed_buckets": ["research"],
+        },
+        store,
+        config,
+    )
+
+    assert any(finding["item_id"] == capture["id"] for finding in response["findings"])
+    assert any(finding["sensitivity"] == "sealed" for finding in response["findings"])
+
+
+def test_admin_audit_respects_namespace_bucket_and_include_archived_filters():
+    store = InMemoryStore()
+    config = enabled_config()
+    kept = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "API_KEY=keep-me-visible",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+    archived = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "API_KEY=archived-secret",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+    capture_memory(
+        {
+            "namespace": "other-project",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "API_KEY=other-namespace",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+
+    delete_memory(
+        {
+            "id": archived["id"],
+            "mode": "soft_delete",
+            "reason": "archive",
+            "actor": "tester",
+        },
+        store,
+        config,
+    )
+
+    response = audit_memory(
+        {
+            "namespace": "project-alpha",
+            "allowed_buckets": ["research"],
+        },
+        store,
+        config,
+    )
+    included_response = audit_memory(
+        {
+            "namespace": "project-alpha",
+            "allowed_buckets": ["research"],
+            "include_archived": True,
+        },
+        store,
+        config,
+    )
+
+    visible_ids = {finding["item_id"] for finding in response["findings"]}
+    included_ids = {finding["item_id"] for finding in included_response["findings"]}
+    assert kept["id"] in visible_ids
+    assert archived["id"] not in visible_ids
+    assert archived["id"] in included_ids
+
+
+def test_admin_audit_finds_metadata_secrets_and_returns_metadata_redaction_action():
+    store = InMemoryStore()
+    config = enabled_config()
+    capture = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "safe content",
+            "content_format": "markdown",
+            "source_type": "note",
+            "metadata": {"config_line": "SECRET_KEY=super-secret-value"},
+        },
+        store=store,
+        config=config,
+    )
+
+    response = audit_memory(
+        {
+            "namespace": "project-alpha",
+            "allowed_buckets": ["research"],
+        },
+        store,
+        config,
+    )
+
+    assert any(
+        finding["item_id"] == capture["id"] and finding["field"] == "metadata.config_line"
+        for finding in response["findings"]
+    )
+    assert any(
+        action["action"] == "manual_redact_metadata"
+        for action in response["candidate_actions"]
+    )
+
+
+def test_admin_audit_emits_single_soft_delete_action_per_item():
+    store = InMemoryStore()
+    config = enabled_config()
+    capture = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "API_KEY=super-secret-value",
+            "content_format": "markdown",
+            "source_type": "note",
+            "metadata": {"config_line": "SECRET_KEY=super-secret-value"},
+        },
+        store=store,
+        config=config,
+    )
+
+    response = audit_memory(
+        {
+            "namespace": "project-alpha",
+            "allowed_buckets": ["research"],
+        },
+        store,
+        config,
+    )
+
+    soft_delete_actions = [
+        action
+        for action in response["candidate_actions"]
+        if action["item_id"] == capture["id"] and action["action"] == "soft_delete_item"
+    ]
+    assert len(soft_delete_actions) == 1
 
 
 def test_admin_reindex_rebuilds_record_artifacts():

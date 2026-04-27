@@ -7,6 +7,10 @@ from urllib.parse import urlparse
 
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.retrieval.rankers import SemanticRanker, SentenceTransformersRanker
+from neurocore.reporting.consensus import (
+    MultiModelConsensusReporter,
+    OpenAICompatibleReportClient,
+)
 from neurocore.storage.base import BaseStore
 from neurocore.storage.in_memory import InMemoryStore
 from neurocore.storage.postgres_store import PostgresStore
@@ -68,6 +72,8 @@ def build_summarizer(config: NeuroCoreConfig) -> Summarizer:
             raise ValueError("Multi-model consensus requires unique model names")
         if not config.consensus_base_url:
             raise ValueError("Multi-model consensus requires a consensus base URL")
+        if not config.consensus_api_key:
+            raise ValueError("Multi-model consensus requires a consensus API key")
         return MultiModelConsensusSummarizer(
             model_client=OpenAICompatibleSummaryClient(
                 base_url=config.consensus_base_url,
@@ -76,6 +82,31 @@ def build_summarizer(config: NeuroCoreConfig) -> Summarizer:
             model_names=config.consensus_model_names,
         )
     return ConsensusSummarizer()
+
+
+def build_reporter(config: NeuroCoreConfig) -> MultiModelConsensusReporter:
+    """Build the consensus reporting engine for the current runtime."""
+    if not config.enable_multi_model_consensus:
+        raise PermissionError("Reporting is disabled")
+    if config.consensus_provider != "openai_compatible":
+        raise ValueError("Consensus reporting requires a supported consensus provider")
+    if len(config.consensus_model_names) < 2:
+        raise ValueError(
+            "Consensus reporting requires at least two configured model names"
+        )
+    if len(set(config.consensus_model_names)) != len(config.consensus_model_names):
+        raise ValueError("Consensus reporting requires unique model names")
+    if not config.consensus_base_url:
+        raise ValueError("Consensus reporting requires a consensus base URL")
+    if not config.consensus_api_key:
+        raise ValueError("Consensus reporting requires a consensus API key")
+    return MultiModelConsensusReporter(
+        model_client=OpenAICompatibleReportClient(
+            base_url=config.consensus_base_url,
+            api_key=config.consensus_api_key,
+        ),
+        model_names=config.consensus_model_names,
+    )
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,19 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TextIO
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import urlparse
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from neurocore.core.config import ConfigError, load_config
+from neurocore.core.semantic import sentence_transformers_status
+from neurocore.runtime import build_reporter
 
 SECURITY_BUCKETS = (
     "recon",
@@ -56,6 +68,7 @@ PRESETS = {
     },
 }
 PRESET_NAMES = tuple(PRESETS)
+LOCAL_CONSENSUS_BASE_URL = "http://127.0.0.1:8787/v1"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -212,6 +225,83 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the retrieval sensitivity ceiling.",
     )
 
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Generate a consensus report from NeuroCore query context.",
+    )
+    report_parser.add_argument("query_text", help="Search text.")
+    report_parser.add_argument(
+        "--objective",
+        required=True,
+        help="Report objective sent to the consensus reporter.",
+    )
+    report_parser.add_argument(
+        "--namespace",
+        help="Override the default namespace from .env.",
+    )
+    report_parser.add_argument(
+        "--preset",
+        choices=PRESET_NAMES,
+        help="Apply a saved workflow preset.",
+    )
+    report_parser.add_argument(
+        "--bucket",
+        action="append",
+        choices=SECURITY_BUCKETS,
+        default=[],
+        help="Repeat to search one or more buckets. Defaults to preset query buckets.",
+    )
+    report_parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="Repeat to match any of these tags.",
+    )
+    report_parser.add_argument(
+        "--source-type",
+        action="append",
+        default=[],
+        help="Repeat to filter by source type such as paper or agent_trace.",
+    )
+    report_parser.add_argument(
+        "--section",
+        action="append",
+        default=[],
+        help="Repeat to choose report sections.",
+    )
+    report_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=8,
+        help="Maximum number of query results to retrieve before reporting.",
+    )
+    report_parser.add_argument(
+        "--max-items",
+        type=int,
+        default=5,
+        help="Maximum number of retrieved items to include in report context.",
+    )
+    report_parser.add_argument(
+        "--return-mode",
+        choices=("hybrid", "record_only", "chunk_only", "document_aggregate"),
+        default="hybrid",
+        help="Query response mode.",
+    )
+    report_parser.add_argument(
+        "--sensitivity-ceiling",
+        default=None,
+        help="Override the retrieval sensitivity ceiling.",
+    )
+    report_parser.add_argument(
+        "--target",
+        default=None,
+        help="Optional target or engagement label carried with the request.",
+    )
+
+    subparsers.add_parser(
+        "capabilities",
+        help="Report helper readiness for sibling bridge integrations.",
+    )
     subparsers.add_parser("presets", help="List the saved workflow presets.")
 
     return parser
@@ -267,13 +357,18 @@ def _add_capture_args(
 
 
 def main(argv: list[str] | None = None) -> int:
+    repo_root = Path(__file__).resolve().parents[1]
+    _maybe_reexec_into_repo_runtime(argv or sys.argv[1:], repo_root)
     parser = build_parser()
     args = parser.parse_args(argv)
-    repo_root = Path(__file__).resolve().parents[1]
     env = _runtime_env(repo_root)
 
     if args.command == "presets":
         print(json.dumps(PRESETS, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "capabilities":
+        print(json.dumps(_capabilities_payload(repo_root, env), indent=2, sort_keys=True))
         return 0
 
     if args.command == "capture-note":
@@ -341,24 +436,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _run_neurocore(repo_root, env, "capture", request)
 
-    preset = PRESETS.get(args.preset or "")
-    request = {
-        "query_text": args.query_text,
-        "allowed_buckets": args.bucket or preset.get("query_buckets", list(SECURITY_BUCKETS)),
-        "sensitivity_ceiling": (
-            args.sensitivity_ceiling
-            or env.get("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
-        ),
-        "top_k": args.top_k,
-        "return_mode": args.return_mode,
-    }
-    if args.namespace:
-        request["namespace"] = args.namespace
-    if args.tag:
-        request["tags_any"] = args.tag
-    if args.source_type:
-        request["source_types"] = args.source_type
-    return _run_neurocore(repo_root, env, "query", request)
+    if args.command == "report":
+        query_request = _build_query_request(args, env)
+        report_request: dict[str, object] = {
+            "objective": args.objective,
+            "query_request": query_request,
+            "max_items": args.max_items,
+        }
+        if args.section:
+            report_request["sections"] = args.section
+        if args.target:
+            report_request["target"] = args.target
+        return _run_neurocore(repo_root, env, ["report", "consensus"], report_request)
+
+    return _run_neurocore(repo_root, env, "query", _build_query_request(args, env))
 
 
 def _build_capture_request(
@@ -370,7 +461,7 @@ def _build_capture_request(
     title: str | None = None,
     extra_tags: list[str] | None = None,
 ) -> dict[str, object]:
-    preset = PRESETS.get(args.preset or "")
+    preset = PRESETS.get(args.preset or "", {})
     request: dict[str, object] = {
         "bucket": args.bucket or preset.get("capture_bucket") or args.fallback_bucket,
         "content": content,
@@ -394,6 +485,30 @@ def _build_capture_request(
     final_title = title or args.title
     if final_title:
         request["title"] = final_title
+    return request
+
+
+def _build_query_request(
+    args: argparse.Namespace, env: dict[str, str]
+) -> dict[str, object]:
+    preset = PRESETS.get(args.preset or "", {})
+    request = {
+        "query_text": args.query_text,
+        "allowed_buckets": args.bucket
+        or preset.get("query_buckets", list(SECURITY_BUCKETS)),
+        "sensitivity_ceiling": (
+            args.sensitivity_ceiling
+            or env.get("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
+        ),
+        "top_k": args.top_k,
+        "return_mode": args.return_mode,
+    }
+    if args.namespace:
+        request["namespace"] = args.namespace
+    if args.tag:
+        request["tags_any"] = args.tag
+    if args.source_type:
+        request["source_types"] = args.source_type
     return request
 
 
@@ -485,7 +600,114 @@ def _runtime_env(repo_root: Path) -> dict[str, str]:
     env.update(_load_env_file(repo_root / ".env"))
     env.setdefault("NEUROCORE_ALLOWED_BUCKETS", ",".join(SECURITY_BUCKETS))
     env.setdefault("NEUROCORE_DEFAULT_SENSITIVITY", "restricted")
+    env.setdefault("NEUROCORE_DEFAULT_NAMESPACE", "security-lab")
+    src_path = str(repo_root / "src")
+    existing_pythonpath = env.get("PYTHONPATH", "").strip()
+    if existing_pythonpath:
+        parts = existing_pythonpath.split(os.pathsep)
+        if src_path not in parts:
+            env["PYTHONPATH"] = os.pathsep.join([src_path, *parts])
+    else:
+        env["PYTHONPATH"] = src_path
     return env
+
+
+def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, object]:
+    issues: list[str] = []
+    issues_by_surface: dict[str, list[str]] = {
+        "runtime": [],
+        "default_namespace": [],
+        "query": [],
+        "semantic": [],
+        "report": [],
+    }
+    default_namespace_ready = bool(env.get("NEUROCORE_DEFAULT_NAMESPACE", "").strip())
+    if not default_namespace_ready:
+        issues_by_surface["default_namespace"].append(
+            "Missing required configuration: NEUROCORE_DEFAULT_NAMESPACE"
+        )
+    if not (repo_root / ".env").exists():
+        issues_by_surface["runtime"].append(
+            f"Missing NeuroCore .env file: {repo_root / '.env'}"
+        )
+
+    resolved_python = _resolve_repo_python(repo_root, env)
+    if resolved_python is None:
+        issues_by_surface["runtime"].append(
+            "NeuroCore Python executable is missing. "
+            "Set NEUROCORE_PYTHON_EXECUTABLE or run `python scripts/bootstrap.py` first."
+        )
+
+    query_ready = False
+    semantic_ready = False
+    report_ready = False
+    report_provider_mode = "disabled"
+    config = None
+    try:
+        config = load_config(env)
+        query_ready = True
+    except ConfigError as exc:
+        issues_by_surface["query"].append(str(exc))
+
+    if config is not None:
+        report_provider_mode = _report_provider_mode(config)
+        if config.semantic_backend == "none":
+            semantic_ready = True
+        elif config.semantic_backend == "sentence-transformers":
+            semantic_status, semantic_issue = sentence_transformers_status()
+            semantic_ready = semantic_status == "ready"
+            if not semantic_ready:
+                query_ready = False
+                if semantic_issue:
+                    issues_by_surface["semantic"].append(semantic_issue)
+        else:
+            issues_by_surface["semantic"].append(
+                f"Semantic backend {config.semantic_backend} is not recognized."
+            )
+            query_ready = False
+        try:
+            build_reporter(config)
+            report_ready = True
+        except PermissionError:
+            issues_by_surface["report"].append("Consensus reporting disabled")
+        except ValueError as exc:
+            issues_by_surface["report"].append(str(exc))
+
+    for surface_issues in issues_by_surface.values():
+        issues.extend(surface_issues)
+
+    return {
+        "config_ready": query_ready,
+        "default_namespace_ready": default_namespace_ready,
+        "consensus_report_ready": report_ready,
+        "semantic_ready": semantic_ready,
+        "query_ready": query_ready,
+        "report_ready": report_ready,
+        "report_provider_mode": report_provider_mode,
+        "resolved_python": str(resolved_python) if resolved_python else None,
+        "issues_by_surface": {
+            key: value for key, value in issues_by_surface.items() if value
+        },
+        "issues": _dedupe_strings(issues),
+    }
+
+
+def _report_provider_mode(config) -> str:
+    if not config.enable_multi_model_consensus:
+        return "disabled"
+    if _is_local_mock_base_url(config.consensus_base_url):
+        return "mock_local"
+    return "external_openai_compatible"
+
+
+def _is_local_mock_base_url(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = parsed.path.rstrip("/") or "/"
+    return host in {"127.0.0.1", "localhost"} and port == 8787 and path == "/v1"
 
 
 def _load_env_file(path: Path) -> dict[str, str]:
@@ -504,21 +726,23 @@ def _load_env_file(path: Path) -> dict[str, str]:
 def _run_neurocore(
     repo_root: Path,
     env: dict[str, str],
-    command: str,
+    command: str | list[str],
     request: dict[str, object],
 ) -> int:
-    python_path = repo_root / ".venv" / "bin" / "python"
-    if not python_path.exists():
+    python_path = _resolve_repo_python(repo_root, env)
+    if python_path is None:
         raise SystemExit(
-            "NeuroCore virtual environment is missing. Run `python scripts/bootstrap.py` first."
+            "NeuroCore Python executable is missing. "
+            "Set NEUROCORE_PYTHON_EXECUTABLE or run `python scripts/bootstrap.py` first."
         )
 
+    command_parts = [command] if isinstance(command, str) else list(command)
     completed = subprocess.run(
         [
             str(python_path),
             "-m",
             "neurocore.adapters.cli",
-            command,
+            *command_parts,
             "--request-json",
             json.dumps(request),
         ],
@@ -544,6 +768,73 @@ def _run_neurocore(
         return 0
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
+
+
+def _resolve_repo_python(repo_root: Path, env: dict[str, str]) -> Path | None:
+    override = env.get("NEUROCORE_PYTHON_EXECUTABLE", "").strip()
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.extend(
+        [
+            repo_root / ".venv" / "bin" / "python",
+            repo_root / ".venv" / "Scripts" / "python.exe",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.expanduser().absolute()
+    return None
+
+
+def _maybe_reexec_into_repo_runtime(argv: list[str], repo_root: Path) -> None:
+    repo_python = _resolve_repo_python(repo_root, dict(os.environ))
+    if repo_python is None:
+        return
+    venv_dir = repo_root / ".venv"
+    if Path(sys.prefix).resolve() == venv_dir.resolve():
+        return
+    if os.environ.get("NEUROCORE_SKIP_RUNTIME_REEXEC") == "1":
+        return
+    env = dict(os.environ)
+    env["NEUROCORE_SKIP_RUNTIME_REEXEC"] = "1"
+    os.execve(str(repo_python), [str(repo_python), str(Path(__file__)), *argv], env)
+
+
+def print_readiness_summary(
+    *,
+    repo_root: Path,
+    env: dict[str, str],
+    stdout: TextIO,
+) -> None:
+    payload = _capabilities_payload(repo_root, env)
+    print("", file=stdout)
+    print(
+        "Readiness summary:"
+        f" semantic={'ready' if payload['semantic_ready'] else 'not ready'};"
+        f" query={'ready' if payload['query_ready'] else 'not ready'};"
+        f" report={'ready' if payload['report_ready'] else 'not ready'}",
+        file=stdout,
+    )
+    print(
+        f"Report provider mode: {payload['report_provider_mode']}",
+        file=stdout,
+    )
+    if payload["report_ready"] and payload["report_provider_mode"] == "mock_local":
+        print(
+            "Report readiness is currently using the local mock provider for development only.",
+            file=stdout,
+        )
+    report_issues = payload.get("issues_by_surface", {}).get("report", [])
+    if report_issues:
+        print("Report prerequisites still missing:", file=stdout)
+        for issue in report_issues:
+            print(f"- {issue}", file=stdout)
+        print(
+            "Local-only report generation can use the bundled mock provider at "
+            f"{LOCAL_CONSENSUS_BASE_URL}.",
+            file=stdout,
+        )
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import shlex
@@ -199,8 +200,20 @@ def run_bootstrap(
             ),
         )
         print("Verification completed successfully.", file=stdout)
+        _print_readiness_summary(
+            repo_root=repo_root,
+            runtime_env=runtime_env,
+            stdout=stdout,
+        )
     else:
         print("Skipped verification at your request.", file=stdout)
+        runtime_env = dict(os.environ)
+        runtime_env.update(_load_env_values(env_path))
+        _print_readiness_summary(
+            repo_root=repo_root,
+            runtime_env=runtime_env,
+            stdout=stdout,
+        )
 
     _print_next_steps(stdout)
 
@@ -389,6 +402,20 @@ def _run_subprocess(
     subprocess.run(command, check=True, cwd=cwd, env=env)
 
 
+def _print_readiness_summary(
+    *,
+    repo_root: Path,
+    runtime_env: dict[str, str],
+    stdout: TextIO,
+) -> None:
+    module_path = repo_root / "scripts" / "security_workflow.py"
+    spec = importlib.util.spec_from_file_location("security_workflow_bootstrap", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader is not None
+    spec.loader.exec_module(module)
+    module.print_readiness_summary(repo_root=repo_root, env=runtime_env, stdout=stdout)
+
+
 def _prompt_yes_no(
     input_fn: Callable[[str], str],
     prompt: str,
@@ -419,16 +446,17 @@ def _print_next_steps(stdout: TextIO) -> None:
     print("3. source .env", file=stdout)
     print("4. set +a", file=stdout)
     print(
-        '5. neurocore capture --request-json \'{"bucket":"recon","content":"initial '
+        '5. python scripts/neurocore_checkout.py capture --request-json \'{"bucket":"recon","content":"initial '
         'recon note","content_format":"markdown","source_type":"note"}\'',
         file=stdout,
     )
     print(
-        '6. neurocore query --request-json \'{"query_text":"recon",'
+        '6. python scripts/neurocore_checkout.py query --request-json \'{"query_text":"recon",'
         '"allowed_buckets":["recon","findings"],'
         '"sensitivity_ceiling":"restricted"}\'',
         file=stdout,
     )
+    print("7. python scripts/validate_checkout.py", file=stdout)
 
 
 def _validate_namespace(namespace: str) -> None:
