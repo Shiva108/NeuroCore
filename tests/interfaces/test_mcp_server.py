@@ -23,7 +23,9 @@ async def test_mcp_server_exposes_capture_and_query_tools_only_when_admin_disabl
         "capture_memory",
         "generate_briefing",
         "generate_consensus_report",
+        "list_protocols",
         "query_memory",
+        "run_protocol",
         "ingest_slack_event",
         "ingest_discord_event",
     }
@@ -50,6 +52,8 @@ async def test_mcp_server_registers_admin_tools_when_enabled():
         "capture_memory",
         "generate_briefing",
         "query_memory",
+        "list_protocols",
+        "run_protocol",
         "ingest_slack_event",
         "ingest_discord_event",
         "run_background_summaries",
@@ -82,6 +86,7 @@ async def test_mcp_server_keeps_optional_summary_and_dashboard_tools_gated():
     assert "generate_briefing" in tool_names
     assert "generate_consensus_report" in tool_names
     assert "query_memory" in tool_names
+    assert "run_protocol" in tool_names
     assert "update_memory" in tool_names
     assert "run_background_summaries" not in tool_names
     assert "dashboard_data" not in tool_names

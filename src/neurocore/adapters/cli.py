@@ -16,11 +16,24 @@ from neurocore.interfaces.admin import (
     reindex_memory,
     update_memory,
 )
+from neurocore.interfaces.brains import (
+    archive_brain,
+    create_brain,
+    get_brain,
+    list_brains,
+    update_brain as update_brain_interface,
+)
 from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.capture import capture_memory
 from neurocore.interfaces.ingest import ingest_discord_event, ingest_slack_event
+from neurocore.interfaces.protocols import list_protocols, run_protocol
 from neurocore.interfaces.query import query_memory
 from neurocore.interfaces.reporting import generate_consensus_report
+from neurocore.interfaces.sessions import (
+    capture_session_event,
+    checkpoint_session,
+    resume_session,
+)
 from neurocore.interfaces.summaries import run_background_summaries
 from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
@@ -44,6 +57,30 @@ def build_parser() -> argparse.ArgumentParser:
     report_subparsers = report_parser.add_subparsers(dest="report_command", required=True)
     consensus_parser = report_subparsers.add_parser("consensus")
     consensus_parser.add_argument("--request-json", required=True)
+
+    protocol_parser = subparsers.add_parser("protocol")
+    protocol_subparsers = protocol_parser.add_subparsers(
+        dest="protocol_command", required=True
+    )
+    protocol_run_parser = protocol_subparsers.add_parser("run")
+    protocol_run_parser.add_argument("--request-json", required=True)
+    protocol_subparsers.add_parser("list")
+
+    session_parser = subparsers.add_parser("session")
+    session_subparsers = session_parser.add_subparsers(
+        dest="session_command", required=True
+    )
+    for name in ("capture-event", "checkpoint", "resume"):
+        child = session_subparsers.add_parser(name)
+        child.add_argument("--request-json", required=True)
+
+    brain_parser = subparsers.add_parser("brain")
+    brain_subparsers = brain_parser.add_subparsers(dest="brain_command", required=True)
+    for name in ("create", "get", "update", "archive"):
+        child = brain_subparsers.add_parser(name)
+        child.add_argument("--request-json", required=True)
+    brain_list_parser = brain_subparsers.add_parser("list")
+    brain_list_parser.add_argument("--request-json", default="{}")
 
     ingest_parser = subparsers.add_parser("ingest")
     ingest_subparsers = ingest_parser.add_subparsers(
@@ -123,6 +160,38 @@ def main(
             config=config,
             semantic_ranker=build_semantic_ranker(config),
         )
+    elif args.command == "protocol":
+        if args.protocol_command == "list":
+            response = {"protocols": list_protocols()}
+        else:
+            response = run_protocol(
+                _parse_request(args.request_json),
+                store=store,
+                config=config,
+                semantic_ranker=build_semantic_ranker(config),
+            )
+    elif args.command == "session":
+        request = _parse_request(args.request_json)
+        if args.session_command == "capture-event":
+            response = capture_session_event(request, store=store, config=config)
+        elif args.session_command == "checkpoint":
+            response = checkpoint_session(request, store=store, config=config)
+        else:
+            response = resume_session(request, store=store, config=config)
+    elif args.command == "brain":
+        request = _parse_request(args.request_json)
+        if args.brain_command == "create":
+            response = create_brain(
+                request, store=store, default_allowed_buckets=config.allowed_buckets
+            )
+        elif args.brain_command == "get":
+            response = get_brain(request, store=store)
+        elif args.brain_command == "list":
+            response = list_brains(request, store=store)
+        elif args.brain_command == "archive":
+            response = archive_brain(request, store=store)
+        else:
+            response = update_brain_interface(request, store=store)
     elif args.command == "ingest":
         request = _parse_request(args.request_json)
         if args.ingest_command == "slack":

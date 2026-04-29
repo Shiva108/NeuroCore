@@ -153,6 +153,54 @@ def test_http_api_report_route_delegates_to_reporting_interface(monkeypatch):
     assert called["request"]["objective"] == "Generate a review report."
 
 
+def test_http_api_protocol_route_returns_protocol_payload():
+    store = InMemoryStore()
+    config = build_config(enable_multi_model_consensus=False)
+    capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "critical operator concern with ATT&CK T1190",
+            "content_format": "markdown",
+            "source_type": "note",
+            "tags": ["ciso-concern", "severity:critical"],
+            "title": "Critical external exposure",
+        },
+        store=store,
+        config=config,
+    )
+    app = create_app(store=store, config=config)
+    client = TestClient(app)
+
+    response = client.post(
+        "/protocols/run",
+        json={
+            "name": "cti-review-v1",
+            "namespace": "project-alpha",
+            "query_text": "ATT&CK T1190",
+            "allowed_buckets": ["research"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["protocol"]["name"] == "cti-review-v1"
+    assert "## Actions" in payload["report"]
+
+
+def test_http_api_protocol_list_route_returns_protocol_manifests():
+    app = create_app(store=InMemoryStore(), config=build_config())
+    client = TestClient(app)
+
+    response = client.get("/protocols/list")
+
+    assert response.status_code == 200
+    payload = response.json()
+    names = {entry["name"] for entry in payload["protocols"]}
+    assert "cti-review-v1" in names
+
+
 def test_http_api_briefing_route_delegates_to_briefing_interface(monkeypatch):
     called: dict[str, object] = {}
 

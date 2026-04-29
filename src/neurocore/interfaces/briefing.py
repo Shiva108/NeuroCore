@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from neurocore.core.brains import apply_brain_namespace
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.interfaces.query import query_memory
 from neurocore.storage.base import BaseStore
@@ -93,9 +94,14 @@ def _resolve_context(
 
     raw_query_request = request.get("query_request")
     if isinstance(raw_query_request, dict):
-        query_request = dict(raw_query_request)
-        if brain_id and not str(query_request.get("namespace") or "").strip():
-            query_request["namespace"] = brain_id
+        query_request = apply_brain_namespace(
+            {
+                **dict(raw_query_request),
+                **({"brain_id": brain_id} if brain_id else {}),
+            },
+            store=store,
+            default_namespace=config.default_namespace,
+        )
         query_response = query_memory(
             query_request,
             store=store,
@@ -148,9 +154,14 @@ def _augment_with_operator_hints(
 ) -> dict[str, object] | None:
     if not isinstance(query_response, dict):
         return query_response
-    operator_query = dict(query_request)
-    if brain_id and not str(operator_query.get("namespace") or "").strip():
-        operator_query["namespace"] = brain_id
+    operator_query = apply_brain_namespace(
+        {
+            **dict(query_request),
+            **({"brain_id": brain_id} if brain_id else {}),
+        },
+        store=store,
+        default_namespace=config.default_namespace,
+    )
     operator_query["query_text"] = ""
     existing_tags_any = operator_query.get("tags_any")
     tags_any: list[str] = []

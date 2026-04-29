@@ -1,0 +1,26 @@
+{
+  "name": "Slack Connector",
+  "category": "integrations",
+  "description": "Runnable Slack connector package that ingests events and drives query, report, and protocol flows.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.1.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+",
+      "Slack event payloads"
+    ]
+  },
+  "tags": [
+    "slack",
+    "ingest",
+    "query",
+    "protocol",
+    "reporting"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "10 minutes",
+  "curation": "open"
+}

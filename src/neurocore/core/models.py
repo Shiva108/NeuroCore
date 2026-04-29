@@ -219,3 +219,33 @@ class QueryContext:
             "sensitivity_ceiling",
             validate_sensitivity(self.sensitivity_ceiling),
         )
+
+
+@dataclass(frozen=True)
+class BrainManifest:
+    brain_id: str
+    namespace: str
+    display_name: str
+    description: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    owner: str | None = None
+    tags: tuple[str, ...] = ()
+    default_allowed_buckets: tuple[str, ...] = ()
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "brain_id", _require_text(self.brain_id, "brain_id"))
+        object.__setattr__(self, "namespace", validate_namespace(self.namespace))
+        object.__setattr__(
+            self, "display_name", _require_text(self.display_name, "display_name")
+        )
+        if self.status not in {"active", "archived"}:
+            raise ValueError("status must be active or archived")
+        object.__setattr__(self, "metadata", _validate_metadata(self.metadata))
+        object.__setattr__(
+            self,
+            "default_allowed_buckets",
+            tuple(validate_bucket(bucket) for bucket in self.default_allowed_buckets),
+        )

@@ -17,12 +17,25 @@ from neurocore.interfaces.admin import (
     reindex_memory,
     update_memory,
 )
+from neurocore.interfaces.brains import (
+    archive_brain,
+    create_brain,
+    get_brain,
+    list_brains,
+    update_brain,
+)
 from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.capture import capture_memory
 from neurocore.interfaces.dashboard import build_dashboard_data
 from neurocore.interfaces.ingest import ingest_discord_event, ingest_slack_event
+from neurocore.interfaces.protocols import list_protocols, run_protocol
 from neurocore.interfaces.query import query_memory
 from neurocore.interfaces.reporting import generate_consensus_report
+from neurocore.interfaces.sessions import (
+    capture_session_event,
+    checkpoint_session,
+    resume_session,
+)
 from neurocore.interfaces.summaries import run_background_summaries
 from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
@@ -69,6 +82,28 @@ def _register_core_routes(
     def capture_endpoint(request: dict[str, object]) -> dict[str, object]:
         return capture_memory(request, store=store, config=config)
 
+    @app.post("/brains/create")
+    def brain_create_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return create_brain(
+            request, store=store, default_allowed_buckets=config.allowed_buckets
+        )
+
+    @app.post("/brains/get")
+    def brain_get_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return get_brain(request, store=store)
+
+    @app.post("/brains/list")
+    def brain_list_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return list_brains(request, store=store)
+
+    @app.post("/brains/update")
+    def brain_update_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return update_brain(request, store=store)
+
+    @app.post("/brains/archive")
+    def brain_archive_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return archive_brain(request, store=store)
+
     @app.post("/query")
     def query_endpoint(request: dict[str, object]) -> dict[str, object]:
         return query_memory(
@@ -97,6 +132,31 @@ def _register_core_routes(
                 semantic_ranker=semantic_ranker,
             )
         )
+
+    @app.get("/protocols/list")
+    def protocol_list_endpoint() -> dict[str, object]:
+        return {"protocols": list_protocols()}
+
+    @app.post("/protocols/run")
+    def protocol_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return run_protocol(
+            request,
+            store=store,
+            config=config,
+            semantic_ranker=semantic_ranker,
+        )
+
+    @app.post("/sessions/capture")
+    def session_capture_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return capture_session_event(request, store=store, config=config)
+
+    @app.post("/sessions/checkpoint")
+    def session_checkpoint_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return checkpoint_session(request, store=store, config=config)
+
+    @app.post("/sessions/resume")
+    def session_resume_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return resume_session(request, store=store, config=config)
 
     @app.post("/admin/update")
     def update_endpoint(request: dict[str, object]) -> dict[str, object]:
@@ -153,10 +213,12 @@ def _register_dashboard_read_routes(
     semantic_ranker: object | None,
 ) -> None:
     @app.get("/dashboard/data")
-    def dashboard_data_endpoint(bucket: str | None = None) -> dict[str, object]:
+    def dashboard_data_endpoint(
+        bucket: str | None = None, brain_id: str | None = None
+    ) -> dict[str, object]:
         return _guard_dashboard(
             lambda: build_dashboard_data(
-                store=store, config=config, bucket_filter=bucket
+                store=store, config=config, bucket_filter=bucket, brain_id=brain_id
             ),
             enabled=config.enable_dashboard,
         )
@@ -167,7 +229,7 @@ def _register_dashboard_read_routes(
     ) -> str:
         data = _guard_dashboard(
             lambda: build_dashboard_data(
-                store=store, config=config, bucket_filter=bucket
+                store=store, config=config, bucket_filter=bucket, brain_id=brain_id
             ),
             enabled=config.enable_dashboard,
         )
@@ -178,6 +240,9 @@ def _register_dashboard_read_routes(
             query_result=None,
             briefing_result=None,
             report_result=None,
+            brain_result=None,
+            session_result=None,
+            protocol_result=None,
             admin_result=None,
             active_brain_id=brain_id or config.default_namespace,
         )
@@ -251,6 +316,71 @@ def _register_dashboard_read_routes(
             store=store,
             config=config,
             report_result=report_result,
+        )
+
+    @app.post("/dashboard/brain/create", response_class=HTMLResponse)
+    async def dashboard_brain_create_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        brain_result = _guard_dashboard(
+            lambda: create_brain(
+                payload,
+                store=store,
+                default_allowed_buckets=config.allowed_buckets,
+            ),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            brain_result=brain_result,
+        )
+
+    @app.post("/dashboard/brain/archive", response_class=HTMLResponse)
+    async def dashboard_brain_archive_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        brain_result = _guard_dashboard(
+            lambda: archive_brain(payload, store=store),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            brain_result=brain_result,
+        )
+
+    @app.post("/dashboard/session/resume", response_class=HTMLResponse)
+    async def dashboard_session_resume_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        session_result = _guard_dashboard(
+            lambda: resume_session(payload, store=store, config=config),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            session_result=session_result,
+        )
+
+    @app.post("/dashboard/protocol/run", response_class=HTMLResponse)
+    async def dashboard_protocol_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        protocol_result = _guard_dashboard(
+            lambda: run_protocol(
+                payload,
+                store=store,
+                config=config,
+                semantic_ranker=semantic_ranker,
+            ),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            protocol_result=protocol_result,
         )
 
 
@@ -369,6 +499,9 @@ def _render_dashboard_response(
     query_result: dict[str, object] | None = None,
     briefing_result: dict[str, object] | None = None,
     report_result: dict[str, object] | None = None,
+    brain_result: dict[str, object] | None = None,
+    session_result: dict[str, object] | None = None,
+    protocol_result: dict[str, object] | None = None,
     admin_result: dict[str, object] | None = None,
 ) -> str:
     data = _guard_dashboard(
@@ -376,6 +509,8 @@ def _render_dashboard_response(
             store=store,
             config=config,
             bucket_filter=_optional_str(payload.get("bucket_filter")),
+            brain_id=_optional_str(payload.get("brain_id"))
+            or _optional_str(payload.get("namespace")),
         ),
         enabled=config.enable_dashboard,
     )
@@ -386,6 +521,9 @@ def _render_dashboard_response(
         query_result=query_result,
         briefing_result=briefing_result,
         report_result=report_result,
+        brain_result=brain_result,
+        session_result=session_result,
+        protocol_result=protocol_result,
         admin_result=admin_result,
         active_brain_id=_resolve_dashboard_brain_id(payload, config),
     )

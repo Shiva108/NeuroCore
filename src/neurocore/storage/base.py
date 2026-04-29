@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from neurocore.core.models import (
+    BrainManifest,
     MemoryChunk,
     MemoryDocument,
     MemoryRecord,
@@ -72,6 +73,28 @@ class BaseStore(ABC):
 
     @abstractmethod
     def list_audit_events(self, limit: int = 20) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_brain(self, brain: BrainManifest) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_brain(
+        self, brain_id: str, include_archived: bool = False
+    ) -> BrainManifest | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_brains(self, include_archived: bool = False) -> list[BrainManifest]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_brain(self, brain_id: str, patch: dict[str, object]) -> BrainManifest:
+        raise NotImplementedError
+
+    @abstractmethod
+    def archive_brain(self, brain_id: str, reason: str) -> BrainManifest:
         raise NotImplementedError
 
     @abstractmethod

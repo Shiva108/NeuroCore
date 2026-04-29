@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from neurocore.core.models import (
+    BrainManifest,
     MemoryChunk,
     MemoryDocument,
     MemoryRecord,
@@ -98,6 +99,25 @@ class RoutedStore(BaseStore):
             key=lambda item: item.get("timestamp"),
             reverse=True,
         )[:limit]
+
+    def save_brain(self, brain: BrainManifest) -> None:
+        self.primary_store.save_brain(brain)
+
+    def get_brain(
+        self, brain_id: str, include_archived: bool = False
+    ) -> BrainManifest | None:
+        return self.primary_store.get_brain(
+            brain_id, include_archived=include_archived
+        )
+
+    def list_brains(self, include_archived: bool = False) -> list[BrainManifest]:
+        return self.primary_store.list_brains(include_archived=include_archived)
+
+    def update_brain(self, brain_id: str, patch: dict[str, object]) -> BrainManifest:
+        return self.primary_store.update_brain(brain_id, patch)
+
+    def archive_brain(self, brain_id: str, reason: str) -> BrainManifest:
+        return self.primary_store.archive_brain(brain_id, reason)
 
     def update_record(
         self, item_id: str, patch: dict[str, object], mode: str

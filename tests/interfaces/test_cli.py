@@ -259,6 +259,70 @@ def test_cli_report_consensus_command_returns_report_payload(
     assert called["request"]["objective"] == "Generate a review report."
 
 
+def test_cli_protocol_list_command_returns_protocol_manifests():
+    stdout = io.StringIO()
+    exit_code = main(
+        ["protocol", "list"],
+        store=InMemoryStore(),
+        config=build_config(),
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    names = {entry["name"] for entry in payload["protocols"]}
+    assert "cti-review-v1" in names
+
+
+def test_cli_protocol_run_command_returns_protocol_payload():
+    store = InMemoryStore()
+    config = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("findings", "reports", "ops", "recon", "agents"),
+        default_sensitivity="restricted",
+        enable_multi_model_consensus=False,
+    )
+    capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "reports",
+            "sensitivity": "restricted",
+            "content": "critical ciso concern with ATT&CK T1190",
+            "content_format": "markdown",
+            "source_type": "note",
+            "tags": ["ciso-concern", "severity:critical"],
+            "title": "Critical external exposure",
+        },
+        store=store,
+        config=config,
+    )
+
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "protocol",
+            "run",
+            "--request-json",
+            json.dumps(
+                {
+                    "name": "cti-review-v1",
+                    "namespace": "project-alpha",
+                    "query_text": "ATT&CK T1190",
+                    "allowed_buckets": ["reports"],
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["protocol"]["name"] == "cti-review-v1"
+    assert "## Findings" in payload["report"]
+
+
 def test_cli_report_consensus_command_falls_back_to_briefing_when_disabled():
     store = InMemoryStore()
     config = NeuroCoreConfig(

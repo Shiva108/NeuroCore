@@ -12,6 +12,7 @@ from neurocore.core.content_normalization import (
 )
 from neurocore.core.dedup_index import DedupIndex
 from neurocore.core.models import (
+    BrainManifest,
     MemoryChunk,
     MemoryDocument,
     MemoryRecord,
@@ -22,6 +23,7 @@ from neurocore.storage.base import BaseStore, Candidate
 
 class InMemoryStore(BaseStore):
     def __init__(self) -> None:
+        self.brains: dict[str, BrainManifest] = {}
         self.records: dict[str, MemoryRecord] = {}
         self.documents: dict[str, MemoryDocument] = {}
         self.chunks: dict[str, MemoryChunk] = {}
@@ -121,6 +123,53 @@ class InMemoryStore(BaseStore):
 
     def list_audit_events(self, limit: int = 20) -> list[dict[str, object]]:
         return list(reversed(self.audit_events[-limit:]))
+
+    def save_brain(self, brain: BrainManifest) -> None:
+        self.brains[brain.brain_id] = brain
+
+    def get_brain(
+        self, brain_id: str, include_archived: bool = False
+    ) -> BrainManifest | None:
+        brain = self.brains.get(brain_id)
+        if brain is None:
+            return None
+        if brain.status == "archived" and not include_archived:
+            return None
+        return brain
+
+    def list_brains(self, include_archived: bool = False) -> list[BrainManifest]:
+        brains = list(self.brains.values())
+        if not include_archived:
+            brains = [brain for brain in brains if brain.status != "archived"]
+        return sorted(brains, key=lambda item: item.updated_at, reverse=True)
+
+    def update_brain(self, brain_id: str, patch: dict[str, object]) -> BrainManifest:
+        brain = self.get_brain(brain_id, include_archived=True)
+        if brain is None:
+            raise KeyError(brain_id)
+        updated = replace(
+            brain,
+            display_name=str(patch.get("display_name", brain.display_name)),
+            description=str(patch.get("description", brain.description)),
+            owner=patch.get("owner", brain.owner),
+            tags=tuple(patch.get("tags", brain.tags)),
+            default_allowed_buckets=tuple(
+                patch.get("default_allowed_buckets", brain.default_allowed_buckets)
+            ),
+            metadata=dict(patch.get("metadata", brain.metadata)),
+            updated_at=datetime.now(UTC),
+        )
+        self.save_brain(updated)
+        return updated
+
+    def archive_brain(self, brain_id: str, reason: str) -> BrainManifest:
+        del reason
+        brain = self.get_brain(brain_id, include_archived=True)
+        if brain is None:
+            raise KeyError(brain_id)
+        archived = replace(brain, status="archived", updated_at=datetime.now(UTC))
+        self.save_brain(archived)
+        return archived
 
     def update_record(
         self, item_id: str, patch: dict[str, object], mode: str
@@ -307,7 +356,8 @@ class InMemoryStore(BaseStore):
 
     def has_item(self, item_id: str) -> bool:
         return (
-            item_id in self.records
+            item_id in self.brains
+            or item_id in self.records
             or item_id in self.documents
             or item_id in self.chunks
         )

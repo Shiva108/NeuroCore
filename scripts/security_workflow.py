@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TextIO
 from urllib import error as urllib_error
@@ -393,6 +394,10 @@ def _add_utility_parsers(subparsers) -> None:
         "capabilities",
         help="Report helper readiness for sibling bridge integrations.",
     )
+    subparsers.add_parser(
+        "report-bootstrap",
+        help="Start the bundled local mock reporter when local development mode is configured.",
+    )
     subparsers.add_parser("presets", help="List the saved workflow presets.")
 
 
@@ -458,6 +463,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "capabilities":
         print(json.dumps(_capabilities_payload(repo_root, env), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "report-bootstrap":
+        payload = _report_bootstrap_payload(repo_root, env)
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     if args.command == "capture-note":
@@ -752,6 +762,9 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
     report_ready = False
     briefing_ready = False
     report_provider_mode = "disabled"
+    report_bootstrap_attempted = False
+    report_bootstrap_started = False
+    report_bootstrap_healthy = False
     config = None
     try:
         config = load_config(env)
@@ -781,6 +794,16 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
         try:
             build_reporter(config)
             report_ready, report_issue = _check_reporter_health(config)
+            if (
+                not report_ready
+                and report_provider_mode == "mock_local"
+            ):
+                report_bootstrap_attempted = True
+                bootstrap = _bootstrap_reporter(repo_root, env, config)
+                report_bootstrap_started = bool(bootstrap.get("started"))
+                report_bootstrap_healthy = bool(bootstrap.get("healthy"))
+                if report_bootstrap_healthy:
+                    report_ready, report_issue = _check_reporter_health(config)
             if report_issue:
                 issues_by_surface["report"].append(report_issue)
         except PermissionError:
@@ -800,6 +823,9 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
         "query_ready": query_ready,
         "report_ready": report_ready,
         "report_provider_mode": report_provider_mode,
+        "report_bootstrap_attempted": report_bootstrap_attempted,
+        "report_bootstrap_started": report_bootstrap_started,
+        "report_bootstrap_healthy": report_bootstrap_healthy,
         "resolved_python": str(resolved_python) if resolved_python else None,
         "issues_by_surface": {
             key: value for key, value in issues_by_surface.items() if value
@@ -852,6 +878,101 @@ def _check_reporter_health(config) -> tuple[bool, str | None]:
         except urllib_error.URLError as exc:
             last_error = f"Consensus reporter health check failed: {exc.reason}"
     return False, last_error
+
+
+def _report_bootstrap_payload(repo_root: Path, env: dict[str, str]) -> dict[str, object]:
+    try:
+        config = load_config(env)
+    except ConfigError as exc:
+        return {
+            "mode": "disabled",
+            "started": False,
+            "healthy": False,
+            "base_url": "",
+            "error": str(exc),
+        }
+    return _bootstrap_reporter(repo_root, env, config)
+
+
+def _bootstrap_reporter(
+    repo_root: Path,
+    env: dict[str, str],
+    config,
+) -> dict[str, object]:
+    mode = _report_provider_mode(config)
+    base_url = str(config.consensus_base_url or "").strip()
+    if mode != "mock_local":
+        return {
+            "mode": mode,
+            "started": False,
+            "healthy": False,
+            "base_url": base_url,
+        }
+
+    healthy, _ = _check_reporter_health(config)
+    if healthy:
+        return {
+            "mode": mode,
+            "started": False,
+            "healthy": True,
+            "base_url": base_url,
+        }
+
+    python_path = _resolve_repo_python(repo_root, env)
+    if python_path is None:
+        return {
+            "mode": mode,
+            "started": False,
+            "healthy": False,
+            "base_url": base_url,
+            "error": (
+                "NeuroCore Python executable is missing. "
+                "Set NEUROCORE_PYTHON_EXECUTABLE or run `python scripts/bootstrap.py` first."
+            ),
+        }
+
+    parsed = urlparse(base_url or LOCAL_CONSENSUS_BASE_URL)
+    host = (parsed.hostname or "127.0.0.1").strip() or "127.0.0.1"
+    port = parsed.port or 8787
+    command = [
+        str(python_path),
+        str(repo_root / "scripts" / "mock_openai_compatible.py"),
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+
+    try:
+        subprocess.Popen(
+            command,
+            cwd=repo_root,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return {
+            "mode": mode,
+            "started": False,
+            "healthy": False,
+            "base_url": base_url,
+            "error": f"Could not start local mock reporter: {exc}",
+        }
+
+    for _ in range(10):
+        healthy, _ = _check_reporter_health(config)
+        if healthy:
+            break
+        time.sleep(0.2)
+
+    return {
+        "mode": mode,
+        "started": True,
+        "healthy": healthy,
+        "base_url": base_url,
+    }
 
 
 def _load_env_file(path: Path) -> dict[str, str]:

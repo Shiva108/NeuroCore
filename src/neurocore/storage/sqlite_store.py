@@ -14,6 +14,7 @@ from neurocore.core.content_normalization import (
     normalize_content,
 )
 from neurocore.core.models import (
+    BrainManifest,
     MemoryChunk,
     MemoryDocument,
     MemoryRecord,
@@ -114,6 +115,19 @@ class SQLiteStore(BaseStore):
                     target_ids_json TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     outcome TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS brains (
+                    brain_id TEXT PRIMARY KEY,
+                    namespace TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    owner TEXT,
+                    tags_json TEXT NOT NULL,
+                    default_allowed_buckets_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS retrieval_artifacts (
                     item_id TEXT PRIMARY KEY,
@@ -356,6 +370,80 @@ class SQLiteStore(BaseStore):
             for row in rows
         ]
 
+    def save_brain(self, brain: BrainManifest) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO brains VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    brain.brain_id,
+                    brain.namespace,
+                    brain.display_name,
+                    brain.description,
+                    brain.status,
+                    _dt(brain.created_at),
+                    _dt(brain.updated_at),
+                    brain.owner,
+                    json.dumps(list(brain.tags)),
+                    json.dumps(list(brain.default_allowed_buckets)),
+                    json.dumps(brain.metadata, sort_keys=True),
+                ),
+            )
+
+    def get_brain(
+        self, brain_id: str, include_archived: bool = False
+    ) -> BrainManifest | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM brains WHERE brain_id = ?",
+                (brain_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        brain = self._brain_from_row(row)
+        if brain.status == "archived" and not include_archived:
+            return None
+        return brain
+
+    def list_brains(self, include_archived: bool = False) -> list[BrainManifest]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM brains ORDER BY updated_at DESC"
+            ).fetchall()
+        brains = [self._brain_from_row(row) for row in rows]
+        if include_archived:
+            return brains
+        return [brain for brain in brains if brain.status != "archived"]
+
+    def update_brain(self, brain_id: str, patch: dict[str, object]) -> BrainManifest:
+        brain = self.get_brain(brain_id, include_archived=True)
+        if brain is None:
+            raise KeyError(brain_id)
+        updated = replace(
+            brain,
+            display_name=str(patch.get("display_name", brain.display_name)),
+            description=str(patch.get("description", brain.description)),
+            owner=patch.get("owner", brain.owner),
+            tags=tuple(patch.get("tags", brain.tags)),
+            default_allowed_buckets=tuple(
+                patch.get("default_allowed_buckets", brain.default_allowed_buckets)
+            ),
+            metadata=dict(patch.get("metadata", brain.metadata)),
+            updated_at=datetime.now(UTC),
+        )
+        self.save_brain(updated)
+        return updated
+
+    def archive_brain(self, brain_id: str, reason: str) -> BrainManifest:
+        del reason
+        brain = self.get_brain(brain_id, include_archived=True)
+        if brain is None:
+            raise KeyError(brain_id)
+        archived = replace(brain, status="archived", updated_at=datetime.now(UTC))
+        self.save_brain(archived)
+        return archived
+
     def update_record(
         self, item_id: str, patch: dict[str, object], mode: str
     ) -> MemoryRecord:
@@ -593,9 +681,27 @@ class SQLiteStore(BaseStore):
 
     def has_item(self, item_id: str) -> bool:
         return (
-            self.get_record(item_id, include_archived=True) is not None
+            self.get_brain(item_id, include_archived=True) is not None
+            or self.get_record(item_id, include_archived=True) is not None
             or self.get_document(item_id, include_archived=True) is not None
             or self.get_chunk(item_id) is not None
+        )
+
+    def _brain_from_row(self, row: sqlite3.Row) -> BrainManifest:
+        return BrainManifest(
+            brain_id=str(row["brain_id"]),
+            namespace=str(row["namespace"]),
+            display_name=str(row["display_name"]),
+            description=str(row["description"]),
+            status=str(row["status"]),
+            created_at=_parse_dt(str(row["created_at"])),
+            updated_at=_parse_dt(str(row["updated_at"])),
+            owner=row["owner"],
+            tags=tuple(json.loads(str(row["tags_json"]))),
+            default_allowed_buckets=tuple(
+                json.loads(str(row["default_allowed_buckets_json"]))
+            ),
+            metadata=json.loads(str(row["metadata_json"])),
         )
 
     def _record_from_row(self, row: sqlite3.Row) -> MemoryRecord:

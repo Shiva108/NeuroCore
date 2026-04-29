@@ -1,0 +1,25 @@
+{
+  "name": "Claude Desktop MCP Connector",
+  "category": "integrations",
+  "description": "Runnable Claude Desktop MCP helper that exposes NeuroCore tool discovery plus briefing and protocol execution.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.1.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+",
+      "Claude Desktop MCP support"
+    ]
+  },
+  "tags": [
+    "claude",
+    "mcp",
+    "protocol",
+    "briefing"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "10 minutes",
+  "curation": "open"
+}

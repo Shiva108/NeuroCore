@@ -140,6 +140,51 @@ def test_capabilities_marks_report_unready_when_local_mock_health_fails(tmp_path
     assert payload["issues_by_surface"]["report"] == ["mock provider health check failed"]
 
 
+def test_capabilities_bootstraps_local_mock_and_rechecks_health(tmp_path: Path):
+    (tmp_path / ".env").write_text("NEUROCORE_DEFAULT_NAMESPACE=security-lab\n", encoding="utf-8")
+    env = {
+        "NEUROCORE_DEFAULT_NAMESPACE": "security-lab",
+        "NEUROCORE_ALLOWED_BUCKETS": ",".join(SECURITY_WORKFLOW.SECURITY_BUCKETS),
+        "NEUROCORE_DEFAULT_SENSITIVITY": "restricted",
+        "NEUROCORE_SEMANTIC_BACKEND": "none",
+        "NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS": "true",
+        "NEUROCORE_CONSENSUS_PROVIDER": "openai_compatible",
+        "NEUROCORE_CONSENSUS_MODEL_NAMES": "model-a,model-b",
+        "NEUROCORE_CONSENSUS_BASE_URL": SECURITY_WORKFLOW.LOCAL_CONSENSUS_BASE_URL,
+        "NEUROCORE_CONSENSUS_API_KEY": "local-dev-key",
+    }
+    health_checks = iter(
+        [
+            (False, "mock provider health check failed"),
+            (True, None),
+        ]
+    )
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW,
+        "_check_reporter_health",
+        lambda config: next(health_checks),
+    )
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW,
+        "_bootstrap_reporter",
+        lambda repo_root, env, config: {
+            "mode": "mock_local",
+            "started": True,
+            "healthy": True,
+            "base_url": SECURITY_WORKFLOW.LOCAL_CONSENSUS_BASE_URL,
+        },
+    )
+    try:
+        payload = SECURITY_WORKFLOW._capabilities_payload(tmp_path, env)
+    finally:
+        monkeypatch.undo()
+
+    assert payload["report_ready"] is True
+    assert payload["report_bootstrap_attempted"] is True
+    assert payload["report_bootstrap_started"] is True
+
+
 def test_check_reporter_health_uses_root_health_endpoint_for_local_mock(monkeypatch: pytest.MonkeyPatch):
     class DummyConfig:
         consensus_base_url = SECURITY_WORKFLOW.LOCAL_CONSENSUS_BASE_URL

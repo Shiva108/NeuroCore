@@ -1,0 +1,26 @@
+{
+  "name": "Discord Connector",
+  "category": "integrations",
+  "description": "Runnable Discord connector package that ingests events and drives query, report, and protocol flows.",
+  "owner": {
+    "name": "NeuroCore"
+  },
+  "version": "1.1.0",
+  "requires": {
+    "neurocore": true,
+    "tools": [
+      "Python 3.11+",
+      "Discord message payloads"
+    ]
+  },
+  "tags": [
+    "discord",
+    "ingest",
+    "query",
+    "protocol",
+    "reporting"
+  ],
+  "difficulty": "intermediate",
+  "estimated_time": "10 minutes",
+  "curation": "open"
+}

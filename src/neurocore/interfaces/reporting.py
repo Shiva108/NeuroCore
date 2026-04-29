@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from neurocore.core.brains import apply_brain_namespace
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.query import query_memory
@@ -97,9 +98,14 @@ def _resolve_context(
 
     raw_query_request = request.get("query_request")
     if isinstance(raw_query_request, dict):
-        query_request = dict(raw_query_request)
-        if brain_id and not str(query_request.get("namespace") or "").strip():
-            query_request["namespace"] = brain_id
+        query_request = apply_brain_namespace(
+            {
+                **dict(raw_query_request),
+                **({"brain_id": brain_id} if brain_id else {}),
+            },
+            store=store,
+            default_namespace=config.default_namespace,
+        )
         query_response = query_memory(
             query_request,
             store=store,
