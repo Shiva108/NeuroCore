@@ -16,6 +16,7 @@ from neurocore.interfaces.admin import (
     reindex_memory,
     update_memory,
 )
+from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.capture import capture_memory
 from neurocore.interfaces.ingest import ingest_discord_event, ingest_slack_event
 from neurocore.interfaces.query import query_memory
@@ -35,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     query_parser = subparsers.add_parser("query")
     query_parser.add_argument("--request-json", required=True)
+
+    briefing_parser = subparsers.add_parser("briefing")
+    briefing_parser.add_argument("--request-json", required=True)
 
     report_parser = subparsers.add_parser("report")
     report_subparsers = report_parser.add_subparsers(dest="report_command", required=True)
@@ -100,6 +104,13 @@ def main(
         )
     elif args.command == "query":
         response = query_memory(
+            _parse_request(args.request_json),
+            store=store,
+            config=config,
+            semantic_ranker=build_semantic_ranker(config),
+        )
+    elif args.command == "briefing":
+        response = generate_briefing(
             _parse_request(args.request_json),
             store=store,
             config=config,

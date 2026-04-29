@@ -96,7 +96,7 @@ def test_capture_memory_honors_caller_supplied_created_at():
         config=config,
     )
 
-    stored = store.get_record(response["id"])
+    stored = store.get_record(response["id"]) or store.get_document(response["id"])
 
     assert stored is not None
     assert stored.created_at == datetime.fromisoformat(created_at)
@@ -118,7 +118,7 @@ def test_capture_memory_defaults_namespace_from_config_when_omitted():
         config=config,
     )
 
-    stored = store.get_record(response["id"])
+    stored = store.get_record(response["id"]) or store.get_document(response["id"])
 
     assert response["namespace"] == "project-alpha"
     assert stored is not None
@@ -228,6 +228,71 @@ def test_capture_memory_records_chunk_offsets_for_documents():
     assert first_chunk.start_offset == 0
     assert first_chunk.end_offset is not None
     assert first_chunk.end_offset > first_chunk.start_offset
+
+
+def test_capture_memory_enriches_structured_metadata_and_tags():
+    store = InMemoryStore()
+    config = build_config()
+
+    response = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "ops",
+            "sensitivity": "standard",
+            "content": (
+                "Critical API issue tracked at https://example.com/findings/1. "
+                "Mapped to CVE-2026-12345, CWE-79, and ATT&CK T1190. "
+                "Next action: validate the auth bypass chain."
+            ),
+            "content_format": "markdown",
+            "source_type": "note",
+            "tags": ["manual"],
+        },
+        store=store,
+        config=config,
+    )
+
+    stored = store.get_record(response["id"]) or store.get_document(response["id"])
+
+    assert stored is not None
+    assert stored.metadata["extracted_urls"] == ["https://example.com/findings/1."]
+    assert stored.metadata["extracted_cves"] == ["CVE-2026-12345"]
+    assert stored.metadata["extracted_cwes"] == ["CWE-79"]
+    assert stored.metadata["extracted_attack_ids"] == ["T1190"]
+    assert stored.metadata["severity_markers"] == ["critical"]
+    assert "manual" in stored.tags
+    assert "critical" in stored.tags
+
+
+def test_capture_memory_prefers_model_backed_action_items_when_available():
+    store = InMemoryStore()
+    config = build_config()
+
+    response = capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "ops",
+            "sensitivity": "standard",
+            "content": "Critical API issue. Next action: validate auth bypass chain.",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+        action_item_generator=lambda _content: [
+            "Validate the auth bypass chain.",
+            "Draft remediation owners.",
+        ],
+    )
+
+    stored = store.get_record(response["id"]) or store.get_document(response["id"])
+
+    assert stored is not None
+    assert stored.metadata["suggested_actions"] == [
+        "Validate the auth bypass chain.",
+        "Draft remediation owners.",
+    ]
+    assert stored.metadata["action_items_strategy"] == "model-backed"
 
 
 class FailingDocumentStore(InMemoryStore):

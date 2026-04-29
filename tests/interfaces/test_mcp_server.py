@@ -21,6 +21,8 @@ async def test_mcp_server_exposes_capture_and_query_tools_only_when_admin_disabl
 
     assert tool_names == {
         "capture_memory",
+        "generate_briefing",
+        "generate_consensus_report",
         "query_memory",
         "ingest_slack_event",
         "ingest_discord_event",
@@ -46,6 +48,7 @@ async def test_mcp_server_registers_admin_tools_when_enabled():
 
     assert {
         "capture_memory",
+        "generate_briefing",
         "query_memory",
         "ingest_slack_event",
         "ingest_discord_event",
@@ -76,8 +79,9 @@ async def test_mcp_server_keeps_optional_summary_and_dashboard_tools_gated():
     tool_names = {tool.name for tool in await server.list_tools()}
 
     assert "capture_memory" in tool_names
+    assert "generate_briefing" in tool_names
+    assert "generate_consensus_report" in tool_names
     assert "query_memory" in tool_names
     assert "update_memory" in tool_names
     assert "run_background_summaries" not in tool_names
-    assert "generate_consensus_report" not in tool_names
     assert "dashboard_data" not in tool_names

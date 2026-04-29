@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from neurocore.core.config import NeuroCoreConfig
+from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.query import query_memory
 from neurocore.reporting.consensus import MultiModelConsensusReporter
 from neurocore.reporting.workflows import build_report_context_from_query_response
@@ -21,9 +22,6 @@ def generate_consensus_report(
     reporter: MultiModelConsensusReporter | Any | None = None,
 ) -> dict[str, object]:
     """Generate a multi-model consensus report from explicit or queried context."""
-    if not config.enable_multi_model_consensus:
-        raise PermissionError("Reporting is disabled")
-
     objective = str(request.get("objective", "")).strip()
     if not objective:
         raise ValueError("objective is required")
@@ -36,21 +34,42 @@ def generate_consensus_report(
         config=config,
         semantic_ranker=semantic_ranker,
         max_items=max_items,
+        brain_id=_optional_query_id({"query_id": request.get("brain_id")}),
     )
-    active_reporter = reporter or build_reporter(config)
-    result = active_reporter.generate(
-        objective=objective,
-        context_markdown=context_markdown,
-        sections=sections,
-    )
-    payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
-    metadata = dict(payload.get("metadata", {}))
-    metadata["context_source"] = context_source
-    if query_id:
-        metadata["query_id"] = query_id
-    payload["metadata"] = metadata
-    payload["context_markdown"] = context_markdown
-    return payload
+    try:
+        if not config.enable_multi_model_consensus:
+            raise PermissionError("Reporting is disabled")
+        active_reporter = reporter or build_reporter(config)
+        result = active_reporter.generate(
+            objective=objective,
+            context_markdown=context_markdown,
+            sections=sections,
+        )
+        payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+        metadata = dict(payload.get("metadata", {}))
+        metadata["context_source"] = context_source
+        if query_id:
+            metadata["query_id"] = query_id
+        payload["metadata"] = metadata
+        payload["context_markdown"] = context_markdown
+        payload["mode"] = "report"
+        return payload
+    except (PermissionError, RuntimeError, ValueError) as exc:
+        fallback = _fallback_briefing_response(
+            request,
+            store=store,
+            config=config,
+            semantic_ranker=semantic_ranker,
+            max_items=max_items,
+            fallback_reason=str(exc),
+            context_markdown=context_markdown,
+        )
+        metadata = dict(fallback.get("metadata", {}))
+        metadata["context_source"] = context_source
+        if query_id:
+            metadata["query_id"] = query_id
+        fallback["metadata"] = metadata
+        return fallback
 
 
 def _resolve_context(
@@ -60,6 +79,7 @@ def _resolve_context(
     config: NeuroCoreConfig,
     semantic_ranker: object | None,
     max_items: int,
+    brain_id: str | None,
 ) -> tuple[str, str, str | None]:
     raw_context = request.get("context_markdown")
     if isinstance(raw_context, str) and raw_context.strip():
@@ -77,8 +97,11 @@ def _resolve_context(
 
     raw_query_request = request.get("query_request")
     if isinstance(raw_query_request, dict):
+        query_request = dict(raw_query_request)
+        if brain_id and not str(query_request.get("namespace") or "").strip():
+            query_request["namespace"] = brain_id
         query_response = query_memory(
-            raw_query_request,
+            query_request,
             store=store,
             config=config,
             semantic_ranker=semantic_ranker,
@@ -124,3 +147,40 @@ def _optional_query_id(query_response: dict[str, object]) -> str | None:
     if query_id in (None, ""):
         return None
     return str(query_id)
+
+
+def _fallback_briefing_response(
+    request: dict[str, object],
+    *,
+    store: BaseStore,
+    config: NeuroCoreConfig,
+    semantic_ranker: object | None,
+    max_items: int,
+    fallback_reason: str,
+    context_markdown: str,
+) -> dict[str, object]:
+    briefing_request: dict[str, object] = {
+        "include_operator_hints": True,
+        "max_items": max_items,
+    }
+    if isinstance(request.get("query_response"), dict):
+        briefing_request["query_response"] = request["query_response"]
+    elif isinstance(request.get("query_request"), dict):
+        briefing_request["query_request"] = request["query_request"]
+    elif context_markdown.strip():
+        briefing_request["context_markdown"] = context_markdown
+    if request.get("brain_id") not in (None, ""):
+        briefing_request["brain_id"] = request["brain_id"]
+    briefing = generate_briefing(
+        briefing_request,
+        store=store,
+        config=config,
+        semantic_ranker=semantic_ranker,
+    )
+    metadata = dict(briefing.get("metadata", {}))
+    metadata["fallback_reason"] = fallback_reason
+    return {
+        "mode": "fallback-briefing",
+        "report": briefing["briefing"],
+        "metadata": metadata,
+    }

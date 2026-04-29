@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass, field
 
-from neurocore.ingest.profiles import validate_ingest_profiles
+from neurocore.core.ingest_profiles import (
+    BUCKET_PATTERN,
+    VALID_SENSITIVITIES,
+    validate_ingest_profiles,
+)
 
-BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-VALID_SENSITIVITIES = ("standard", "restricted", "sealed")
 VALID_STORAGE_BACKENDS = ("in_memory", "sqlite", "postgres")
 VALID_SEMANTIC_BACKENDS = ("none", "sentence-transformers")
 VALID_PRODUCTION_BACKEND_PROVIDERS = ("none", "neon")

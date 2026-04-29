@@ -39,9 +39,9 @@ Main capabilities currently present in the repository:
 .
 ├── src/neurocore/
 │   ├── adapters/          # CLI, FastAPI, and MCP adapter implementations
-│   ├── core/              # Configuration, models, and policy validation
+│   ├── core/              # Config, shared content primitives, models, and policy validation
 │   ├── governance/        # Repository contract and secret-scan validator
-│   ├── ingest/            # Chunking, normalization, and dedup helpers
+│   ├── ingest/            # Chunking plus ingest-specific compatibility helpers
 │   ├── interfaces/        # Public capture, query, ingest, admin, dashboard APIs
 │   ├── reporting/         # Report context builders and consensus reporting helpers
 │   ├── retrieval/         # Query engine and rankers
@@ -152,7 +152,8 @@ bounty, pentest, paper-tracking, and agent-memory workflows.
 Two local readiness tiers matter:
 
 - query-ready: capture and retrieval work with your configured storage and semantic backend
-- full report-ready: consensus reporting also works because the local-only consensus provider values are set
+- briefing-ready: synthesized briefings work from durable memory even when reporting is unavailable
+- full report-ready: consensus reporting also works because the configured provider is live for the current invocation
 
 Check the current state at any time:
 
@@ -165,6 +166,15 @@ Check the current state at any time:
 ```bash
 neurocore --help
 ```
+
+### Run structural quality checks
+
+```bash
+make sentrux
+```
+
+This runs the repo's checked-in Sentrux rules plus the saved structural
+baseline from `.sentrux/`.
 
 ### Capture a note
 
@@ -194,6 +204,10 @@ If you want a real external provider instead of the local mock, start from
 ```bash
 neurocore report consensus --request-json '{"objective":"Generate a pentest review report.","query_request":{"query_text":"ssrf findings","allowed_buckets":["findings","reports"],"sensitivity_ceiling":"restricted"}}'
 ```
+
+If consensus reporting is disabled or the provider is unavailable, the same
+report path now returns a synthesized markdown briefing payload with
+`"mode":"fallback-briefing"` instead of hard failing.
 
 ### Ingest an external event payload
 

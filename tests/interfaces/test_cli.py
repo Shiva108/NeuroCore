@@ -6,6 +6,7 @@ import pytest
 from neurocore.adapters import cli as cli_module
 from neurocore.adapters.cli import main, run_http_server, run_mcp_server
 from neurocore.core.config import NeuroCoreConfig
+from neurocore.interfaces.capture import capture_memory
 from neurocore.storage.in_memory import InMemoryStore
 
 
@@ -258,24 +259,128 @@ def test_cli_report_consensus_command_returns_report_payload(
     assert called["request"]["objective"] == "Generate a review report."
 
 
+def test_cli_report_consensus_command_falls_back_to_briefing_when_disabled():
+    store = InMemoryStore()
+    config = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_multi_model_consensus=False,
+    )
+    capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "Validated SSRF finding with evidence and remediation notes.",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "report",
+            "consensus",
+            "--request-json",
+            json.dumps(
+                {
+                    "objective": "Generate a review report.",
+                    "query_request": {
+                        "query_text": "SSRF finding",
+                        "namespace": "project-alpha",
+                        "allowed_buckets": ["research"],
+                        "sensitivity_ceiling": "standard",
+                    },
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["mode"] == "fallback-briefing"
+    assert payload["report"].startswith("## Overview")
+
+
+def test_cli_briefing_command_returns_briefing_payload():
+    store = InMemoryStore()
+    config = build_config()
+    stdout = io.StringIO()
+
+    main(
+        [
+            "capture",
+            "--request-json",
+            json.dumps(
+                {
+                    "namespace": "project-alpha",
+                    "bucket": "research",
+                    "sensitivity": "standard",
+                    "content": "Validated GraphQL auth bypass note.",
+                    "content_format": "markdown",
+                    "source_type": "note",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=io.StringIO(),
+    )
+
+    exit_code = main(
+        [
+            "briefing",
+            "--request-json",
+            json.dumps(
+                {
+                    "brain_id": "project-alpha",
+                    "query_request": {
+                        "query_text": "GraphQL auth bypass",
+                        "allowed_buckets": ["research"],
+                        "sensitivity_ceiling": "standard",
+                    },
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert "## Overview" in payload["briefing"]
+
+
 def test_cli_report_consensus_command_respects_consensus_toggle():
-    with pytest.raises(PermissionError, match="Reporting is disabled"):
-        main(
-            [
-                "report",
-                "consensus",
-                "--request-json",
-                json.dumps(
-                    {
-                        "objective": "Generate a review report.",
-                        "context_markdown": "Retrieved context",
-                    }
-                ),
-            ],
-            store=InMemoryStore(),
-            config=build_config(),
-            stdout=io.StringIO(),
-        )
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "report",
+            "consensus",
+            "--request-json",
+            json.dumps(
+                {
+                    "objective": "Generate a review report.",
+                    "context_markdown": "Retrieved context",
+                }
+            ),
+        ],
+        store=InMemoryStore(),
+        config=build_config(),
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["mode"] == "fallback-briefing"
 
 
 def test_cli_serve_http_command_invokes_http_runner(monkeypatch: pytest.MonkeyPatch):

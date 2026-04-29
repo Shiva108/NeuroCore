@@ -17,6 +17,7 @@ from neurocore.interfaces.admin import (
     reindex_memory,
     update_memory,
 )
+from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.capture import capture_memory
 from neurocore.interfaces.dashboard import build_dashboard_data
 from neurocore.interfaces.ingest import ingest_discord_event, ingest_slack_event
@@ -27,6 +28,7 @@ from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
 
 ResponseT = TypeVar("ResponseT")
+FormValues = dict[str, list[str]]
 
 
 def create_app(
@@ -41,7 +43,28 @@ def create_app(
 
     app = FastAPI(title="NeuroCore")
     app.state.config = config
+    _register_core_routes(
+        app,
+        store=store,
+        config=config,
+        semantic_ranker=semantic_ranker,
+    )
+    _register_dashboard_routes(
+        app,
+        store=store,
+        config=config,
+        semantic_ranker=semantic_ranker,
+    )
+    return app
 
+
+def _register_core_routes(
+    app: FastAPI,
+    *,
+    store: BaseStore,
+    config: NeuroCoreConfig,
+    semantic_ranker: object | None,
+) -> None:
     @app.post("/capture")
     def capture_endpoint(request: dict[str, object]) -> dict[str, object]:
         return capture_memory(request, store=store, config=config)
@@ -49,6 +72,15 @@ def create_app(
     @app.post("/query")
     def query_endpoint(request: dict[str, object]) -> dict[str, object]:
         return query_memory(
+            request,
+            store=store,
+            config=config,
+            semantic_ranker=semantic_ranker,
+        )
+
+    @app.post("/briefings/generate")
+    def briefing_endpoint(request: dict[str, object]) -> dict[str, object]:
+        return generate_briefing(
             request,
             store=store,
             config=config,
@@ -96,6 +128,30 @@ def create_app(
             lambda: run_background_summaries(request, store=store, config=config)
         )
 
+
+def _register_dashboard_routes(
+    app: FastAPI,
+    *,
+    store: BaseStore,
+    config: NeuroCoreConfig,
+    semantic_ranker: object | None,
+) -> None:
+    _register_dashboard_read_routes(
+        app,
+        store=store,
+        config=config,
+        semantic_ranker=semantic_ranker,
+    )
+    _register_dashboard_admin_routes(app, store=store, config=config)
+
+
+def _register_dashboard_read_routes(
+    app: FastAPI,
+    *,
+    store: BaseStore,
+    config: NeuroCoreConfig,
+    semantic_ranker: object | None,
+) -> None:
     @app.get("/dashboard/data")
     def dashboard_data_endpoint(bucket: str | None = None) -> dict[str, object]:
         return _guard_dashboard(
@@ -106,7 +162,9 @@ def create_app(
         )
 
     @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard_endpoint(bucket: str | None = None) -> str:
+    def dashboard_endpoint(
+        bucket: str | None = None, brain_id: str | None = None
+    ) -> str:
         data = _guard_dashboard(
             lambda: build_dashboard_data(
                 store=store, config=config, bucket_filter=bucket
@@ -118,7 +176,10 @@ def create_app(
             config=config,
             capture_result=None,
             query_result=None,
+            briefing_result=None,
+            report_result=None,
             admin_result=None,
+            active_brain_id=brain_id or config.default_namespace,
         )
 
     @app.post("/dashboard/capture", response_class=HTMLResponse)
@@ -128,20 +189,11 @@ def create_app(
             lambda: capture_memory(payload, store=store, config=config),
             enabled=config.enable_dashboard,
         )
-        data = _guard_dashboard(
-            lambda: build_dashboard_data(
-                store=store,
-                config=config,
-                bucket_filter=_optional_str(payload.get("bucket_filter")),
-            ),
-            enabled=config.enable_dashboard,
-        )
-        return _render_reference_app(
-            data=data,
+        return _render_dashboard_response(
+            payload,
+            store=store,
             config=config,
             capture_result=capture_result,
-            query_result=None,
-            admin_result=None,
         )
 
     @app.post("/dashboard/query", response_class=HTMLResponse)
@@ -156,20 +208,70 @@ def create_app(
             ),
             enabled=config.enable_dashboard,
         )
-        data = _guard_dashboard(
-            lambda: build_dashboard_data(
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            query_result=query_result,
+        )
+
+    @app.post("/dashboard/briefing", response_class=HTMLResponse)
+    async def dashboard_briefing_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        briefing_result = _guard_dashboard(
+            lambda: generate_briefing(
+                payload,
                 store=store,
                 config=config,
-                bucket_filter=_optional_str(payload.get("bucket_filter")),
+                semantic_ranker=semantic_ranker,
             ),
             enabled=config.enable_dashboard,
         )
-        return _render_reference_app(
-            data=data,
+        return _render_dashboard_response(
+            payload,
+            store=store,
             config=config,
-            capture_result=None,
-            query_result=query_result,
-            admin_result=None,
+            briefing_result=briefing_result,
+        )
+
+    @app.post("/dashboard/report", response_class=HTMLResponse)
+    async def dashboard_report_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        report_result = _guard_dashboard(
+            lambda: _dashboard_report_result(
+                payload,
+                store=store,
+                config=config,
+                semantic_ranker=semantic_ranker,
+            ),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            report_result=report_result,
+        )
+
+
+def _register_dashboard_admin_routes(
+    app: FastAPI,
+    *,
+    store: BaseStore,
+    config: NeuroCoreConfig,
+) -> None:
+    @app.post("/dashboard/admin/update", response_class=HTMLResponse)
+    async def dashboard_update_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        admin_result = _guard_dashboard(
+            lambda: _guard_admin(lambda: update_memory(payload, store=store, config=config)),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            admin_result=admin_result,
         )
 
     @app.post("/dashboard/admin/reindex", response_class=HTMLResponse)
@@ -181,23 +283,40 @@ def create_app(
             ),
             enabled=config.enable_dashboard,
         )
-        data = _guard_dashboard(
-            lambda: build_dashboard_data(
-                store=store,
-                config=config,
-                bucket_filter=_optional_str(payload.get("bucket_filter")),
-            ),
-            enabled=config.enable_dashboard,
-        )
-        return _render_reference_app(
-            data=data,
+        return _render_dashboard_response(
+            payload,
+            store=store,
             config=config,
-            capture_result=None,
-            query_result=None,
             admin_result=admin_result,
         )
 
-    return app
+    @app.post("/dashboard/admin/audit", response_class=HTMLResponse)
+    async def dashboard_audit_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        admin_result = _guard_dashboard(
+            lambda: _guard_admin(lambda: audit_memory(payload, store=store, config=config)),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            admin_result=admin_result,
+        )
+
+    @app.post("/dashboard/admin/delete", response_class=HTMLResponse)
+    async def dashboard_delete_endpoint(request: Request) -> str:
+        payload = await _parse_form_payload(request)
+        admin_result = _guard_dashboard(
+            lambda: _guard_admin(lambda: delete_memory(payload, store=store, config=config)),
+            enabled=config.enable_dashboard,
+        )
+        return _render_dashboard_response(
+            payload,
+            store=store,
+            config=config,
+            admin_result=admin_result,
+        )
 
 
 def _guard_admin(fn: Callable[[], ResponseT]) -> ResponseT:
@@ -241,46 +360,160 @@ def _guard_feature(
     return fn()
 
 
+def _render_dashboard_response(
+    payload: dict[str, object],
+    *,
+    store: BaseStore,
+    config: NeuroCoreConfig,
+    capture_result: dict[str, object] | None = None,
+    query_result: dict[str, object] | None = None,
+    briefing_result: dict[str, object] | None = None,
+    report_result: dict[str, object] | None = None,
+    admin_result: dict[str, object] | None = None,
+) -> str:
+    data = _guard_dashboard(
+        lambda: build_dashboard_data(
+            store=store,
+            config=config,
+            bucket_filter=_optional_str(payload.get("bucket_filter")),
+        ),
+        enabled=config.enable_dashboard,
+    )
+    return _render_reference_app(
+        data=data,
+        config=config,
+        capture_result=capture_result,
+        query_result=query_result,
+        briefing_result=briefing_result,
+        report_result=report_result,
+        admin_result=admin_result,
+        active_brain_id=_resolve_dashboard_brain_id(payload, config),
+    )
+
+
 async def _parse_form_payload(request: Request) -> dict[str, object]:
     raw = (await request.body()).decode("utf-8")
     form_values = parse_qs(raw, keep_blank_values=False)
+    payload = _build_dashboard_payload(
+        request.url.path, form_values, request.app.state.config
+    )
     bucket_filter = _first_value(form_values, "bucket_filter")
-    payload: dict[str, object] = {}
-
-    if request.url.path.endswith("/capture"):
-        payload = {
-            "namespace": _first_value(form_values, "namespace") or None,
-            "bucket": _first_value(form_values, "bucket"),
-            "sensitivity": _first_value(form_values, "sensitivity"),
-            "content": _first_value(form_values, "content"),
-            "content_format": _first_value(form_values, "content_format") or "markdown",
-            "source_type": _first_value(form_values, "source_type") or "note",
-            "title": _first_value(form_values, "title") or None,
-        }
-    elif request.url.path.endswith("/query"):
-        allowed_buckets = _first_value(form_values, "allowed_buckets") or ",".join(
-            request.app.state.config.allowed_buckets
-        )
-        payload = {
-            "query_text": _first_value(form_values, "query_text"),
-            "namespace": _first_value(form_values, "namespace")
-            or request.app.state.config.default_namespace,
-            "allowed_buckets": [
-                value.strip() for value in allowed_buckets.split(",") if value.strip()
-            ],
-            "sensitivity_ceiling": _first_value(form_values, "sensitivity_ceiling")
-            or request.app.state.config.default_sensitivity,
-        }
-    else:
-        ids = _first_value(form_values, "ids") or ""
-        payload = {
-            "ids": [value.strip() for value in ids.split(",") if value.strip()],
-            "scope": _first_value(form_values, "scope") or "records",
-        }
-
     if bucket_filter:
         payload["bucket_filter"] = bucket_filter
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _build_dashboard_payload(
+    path: str,
+    form_values: FormValues,
+    config: NeuroCoreConfig,
+) -> dict[str, object]:
+    for suffix, builder in (
+        ("/capture", _build_capture_form_payload),
+        ("/query", _build_query_form_payload),
+        ("/briefing", _build_briefing_form_payload),
+        ("/report", _build_report_form_payload),
+        ("/update", _build_update_form_payload),
+    ):
+        if path.endswith(suffix):
+            return builder(form_values, config)
+    return _build_delete_form_payload(form_values, config)
+
+
+def _build_capture_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    return {
+        "namespace": _first_value(form_values, "namespace") or None,
+        "bucket": _first_value(form_values, "bucket"),
+        "sensitivity": _first_value(form_values, "sensitivity"),
+        "content": _first_value(form_values, "content"),
+        "content_format": _first_value(form_values, "content_format") or "markdown",
+        "source_type": _first_value(form_values, "source_type") or "note",
+        "title": _first_value(form_values, "title") or None,
+    }
+
+
+def _build_query_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    return _build_query_request_from_form(form_values, config)
+
+
+def _build_briefing_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    namespace = _form_namespace(form_values, config)
+    return {
+        "brain_id": _first_value(form_values, "brain_id") or namespace,
+        "query_request": _build_query_request_from_form(form_values, config),
+        "include_operator_hints": True,
+    }
+
+
+def _build_report_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    namespace = _form_namespace(form_values, config)
+    return {
+        "brain_id": _first_value(form_values, "brain_id") or namespace,
+        "objective": _first_value(form_values, "objective")
+        or "Generate a durable memory report.",
+        "query_request": _build_query_request_from_form(form_values, config),
+        "max_items": 5,
+    }
+
+
+def _build_update_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    return {
+        "id": _first_value(form_values, "id"),
+        "mode": _first_value(form_values, "mode") or "replace_content",
+        "patch": {
+            "content": _first_value(form_values, "content"),
+            "title": _first_value(form_values, "title"),
+        },
+        "actor": _first_value(form_values, "actor") or "dashboard",
+    }
+
+
+def _build_delete_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    ids = _first_value(form_values, "ids") or ""
+    return {
+        "ids": [value.strip() for value in ids.split(",") if value.strip()],
+        "scope": _first_value(form_values, "scope") or "records",
+        "mode": _first_value(form_values, "mode") or "soft",
+        "reason": _first_value(form_values, "reason") or "dashboard request",
+    }
+
+
+def _build_query_request_from_form(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    allowed_buckets = _form_allowed_buckets(form_values, config)
+    return {
+        "query_text": _first_value(form_values, "query_text"),
+        "namespace": _form_namespace(form_values, config),
+        "allowed_buckets": allowed_buckets,
+        "sensitivity_ceiling": _first_value(form_values, "sensitivity_ceiling")
+        or config.default_sensitivity,
+    }
+
+
+def _form_allowed_buckets(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> list[str]:
+    raw = _first_value(form_values, "allowed_buckets") or ",".join(
+        config.allowed_buckets
+    )
+    return [value.strip() for value in raw.split(",") if value.strip()]
+
+
+def _form_namespace(form_values: FormValues, config: NeuroCoreConfig) -> str:
+    return _first_value(form_values, "namespace") or config.default_namespace
 
 
 def _render_reference_app(
@@ -289,14 +522,19 @@ def _render_reference_app(
     config: NeuroCoreConfig,
     capture_result: dict[str, object] | None,
     query_result: dict[str, object] | None,
+    briefing_result: dict[str, object] | None,
+    report_result: dict[str, object] | None,
     admin_result: dict[str, object] | None,
+    active_brain_id: str,
 ) -> str:
     stats = data["stats"]
     production = data["production_backend"]
     available_buckets = data.get("available_buckets", [])
     active_bucket = data.get("active_bucket_filter") or ""
     capture_feedback = _render_result_block("Capture Result", capture_result)
-    query_feedback = _render_result_block("Query Result", query_result)
+    query_feedback = _render_result_block("Search Result", query_result)
+    briefing_feedback = _render_result_block("Briefing Result", briefing_result)
+    report_feedback = _render_result_block("Report Result", report_result)
     admin_feedback = _render_result_block("Admin Result", admin_result)
     recent_documents = _render_document_list(data["recent_documents"])
     recent_records = _render_record_list(data.get("recent_records", []))
@@ -308,34 +546,16 @@ def _render_reference_app(
         f"Production backend: {production['provider']} ({production['status']})"
     )
     capture_bucket = escape(str(active_bucket or "research"))
+    brain_id = escape(active_brain_id or config.default_namespace)
     default_sensitivity = escape(config.default_sensitivity)
     allowed_bucket_values = escape(",".join(available_buckets) or str(active_bucket))
-    sensitivity_filter_input = (
-        '<label>Sensitivity ceiling <input type="text" '
-        f'name="sensitivity_ceiling" value="{default_sensitivity}" /></label>'
-    )
     bucket_options = "".join(
         _render_bucket_option(bucket, active_bucket) for bucket in available_buckets
     )
-    admin_section = ""
-    if config.enable_admin_surface:
-        admin_section = f"""
-        <section>
-          <h2>Admin Actions</h2>
-          <form method="post" action="/dashboard/admin/reindex">
-            <label>IDs <input type="text" name="ids" /></label>
-            <label>Scope
-              <select name="scope">
-                <option value="records">records</option>
-                <option value="documents">documents</option>
-              </select>
-            </label>
-            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
-            <button type="submit">Reindex</button>
-          </form>
-        </section>
-        """
-
+    sensitivity_filter_input = _render_sensitivity_filter_input(default_sensitivity)
+    admin_section = (
+        _render_admin_section(brain_id, active_bucket) if config.enable_admin_surface else ""
+    )
     return f"""
     <html>
       <head><title>NeuroCore Reference App</title></head>
@@ -343,9 +563,89 @@ def _render_reference_app(
         <h1>NeuroCore Reference App</h1>
         <p>{stats_line}</p>
         <p>{production_line}</p>
+        {_render_brain_selector_section(brain_id, active_bucket)}
+        {_render_capture_section(
+            brain_id,
+            capture_bucket,
+            default_sensitivity,
+            active_bucket,
+            capture_feedback,
+        )}
+        {_render_search_section(
+            brain_id,
+            allowed_bucket_values,
+            sensitivity_filter_input,
+            active_bucket,
+            query_feedback,
+        )}
+        {_render_briefing_section(
+            brain_id,
+            allowed_bucket_values,
+            sensitivity_filter_input,
+            active_bucket,
+            briefing_feedback,
+        )}
+        {_render_report_section(
+            brain_id,
+            allowed_bucket_values,
+            sensitivity_filter_input,
+            active_bucket,
+            report_feedback,
+        )}
+        {_render_filter_section(bucket_options)}
+        <section>
+          <h2>Recent Memory</h2>
+          <ul>{recent_records}</ul>
+        </section>
+        <section>
+          <h2>Recent Documents</h2>
+          <ul>{recent_documents}</ul>
+        </section>
+        <section>
+          <h2>Recent Memory / Audit</h2>
+          <ul>{_render_audit_list(data.get("recent_audit_events", []))}</ul>
+        </section>
+        {admin_section}
+        {admin_feedback}
+      </body>
+    </html>
+    """
+
+
+def _render_sensitivity_filter_input(default_sensitivity: str) -> str:
+    return (
+        '<label>Sensitivity ceiling <input type="text" '
+        f'name="sensitivity_ceiling" value="{default_sensitivity}" /></label>'
+    )
+
+
+def _render_brain_selector_section(brain_id: str, active_bucket: object) -> str:
+    return f"""
+        <section>
+          <h2>Brain Selector</h2>
+          <p>Active brain / namespace: <strong>{brain_id}</strong></p>
+          <p><small>`brain_id` is the UX alias; core storage still enforces the underlying namespace.</small></p>
+          <form method="get" action="/dashboard">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
+            <input type="hidden" name="bucket" value="{escape(str(active_bucket))}" />
+            <button type="submit">Switch Brain</button>
+          </form>
+        </section>
+    """
+
+
+def _render_capture_section(
+    brain_id: str,
+    capture_bucket: str,
+    default_sensitivity: str,
+    active_bucket: object,
+    capture_feedback: str,
+) -> str:
+    return f"""
         <section>
           <h2>Capture Memory</h2>
           <form method="post" action="/dashboard/capture">
+            <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
             <label>Bucket <input type="text" name="bucket" value="{capture_bucket}" /></label>
             <label>Sensitivity <input type="text" name="sensitivity" value="{default_sensitivity}" /></label>
             <label>Title <input type="text" name="title" /></label>
@@ -357,9 +657,21 @@ def _render_reference_app(
           </form>
           {capture_feedback}
         </section>
+    """
+
+
+def _render_search_section(
+    brain_id: str,
+    allowed_bucket_values: str,
+    sensitivity_filter_input: str,
+    active_bucket: object,
+    query_feedback: str,
+) -> str:
+    return f"""
         <section>
-          <h2>Query Memory</h2>
+          <h2>Search Memory</h2>
           <form method="post" action="/dashboard/query">
+            <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
             <label>Query text <input type="text" name="query_text" /></label>
             <label>Allowed buckets <input type="text" name="allowed_buckets" value="{allowed_bucket_values}" /></label>
             {sensitivity_filter_input}
@@ -368,6 +680,61 @@ def _render_reference_app(
           </form>
           {query_feedback}
         </section>
+    """
+
+
+def _render_briefing_section(
+    brain_id: str,
+    allowed_bucket_values: str,
+    sensitivity_filter_input: str,
+    active_bucket: object,
+    briefing_feedback: str,
+) -> str:
+    return f"""
+        <section>
+          <h2>Briefing Pane</h2>
+          <form method="post" action="/dashboard/briefing">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
+            <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
+            <label>Query text <input type="text" name="query_text" /></label>
+            <label>Allowed buckets <input type="text" name="allowed_buckets" value="{allowed_bucket_values}" /></label>
+            {sensitivity_filter_input}
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Generate Briefing</button>
+          </form>
+          {briefing_feedback}
+        </section>
+    """
+
+
+def _render_report_section(
+    brain_id: str,
+    allowed_bucket_values: str,
+    sensitivity_filter_input: str,
+    active_bucket: object,
+    report_feedback: str,
+) -> str:
+    return f"""
+        <section>
+          <h2>Report Pane</h2>
+          <p><small>When consensus reporting is unavailable, this pane degrades to a synthesized briefing instead of returning a hard failure.</small></p>
+          <form method="post" action="/dashboard/report">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
+            <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
+            <label>Objective <input type="text" name="objective" value="Generate a durable memory report." /></label>
+            <label>Query text <input type="text" name="query_text" /></label>
+            <label>Allowed buckets <input type="text" name="allowed_buckets" value="{allowed_bucket_values}" /></label>
+            {sensitivity_filter_input}
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Generate Report</button>
+          </form>
+          {report_feedback}
+        </section>
+    """
+
+
+def _render_filter_section(bucket_options: str) -> str:
+    return f"""
         <section>
           <h2>Filter Recent Activity</h2>
           <form method="get" action="/dashboard">
@@ -380,25 +747,70 @@ def _render_reference_app(
             <button type="submit">Apply Filter</button>
           </form>
         </section>
+    """
+
+
+def _render_admin_section(brain_id: str, active_bucket: object) -> str:
+    return f"""
         <section>
-          <h2>Recent Records</h2>
-          <ul>{recent_records}</ul>
+          <h2>Admin Actions</h2>
+          <form method="post" action="/dashboard/admin/update">
+            <label>ID <input type="text" name="id" /></label>
+            <label>Mode
+              <select name="mode">
+                <option value="replace_content">supersede content</option>
+                <option value="in_place">in place</option>
+              </select>
+            </label>
+            <label>Title <input type="text" name="title" /></label>
+            <label>Content <textarea name="content"></textarea></label>
+            <input type="hidden" name="brain_id" value="{brain_id}" />
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Supersede / Update</button>
+          </form>
+          <form method="post" action="/dashboard/admin/reindex">
+            <label>IDs <input type="text" name="ids" /></label>
+            <label>Scope
+              <select name="scope">
+                <option value="records">records</option>
+                <option value="documents">documents</option>
+              </select>
+            </label>
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Reindex</button>
+          </form>
+          <form method="post" action="/dashboard/admin/audit">
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Audit Memory</button>
+          </form>
+          <form method="post" action="/dashboard/admin/delete">
+            <label>IDs <input type="text" name="ids" /></label>
+            <label>Reason <input type="text" name="reason" value="dashboard cleanup" /></label>
+            <label>Mode
+              <select name="mode">
+                <option value="soft">soft</option>
+                <option value="hard">hard</option>
+              </select>
+            </label>
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Delete</button>
+          </form>
         </section>
-        <section>
-          <h2>Recent Documents</h2>
-          <ul>{recent_documents}</ul>
-        </section>
-        {admin_section}
-        {admin_feedback}
-      </body>
-    </html>
     """
 
 
 def _render_result_block(title: str, payload: dict[str, object] | None) -> str:
     if payload is None:
         return ""
-    if title == "Query Result":
+    if title == "Briefing Result" and "briefing" in payload:
+        return f"<div><h3>{title}</h3><pre>{escape(str(payload['briefing']))}</pre></div>"
+    if title == "Report Result" and "report" in payload:
+        mode = escape(str(payload.get("mode", "report")))
+        return (
+            f"<div><h3>{title}</h3><p><strong>Mode:</strong> {mode}</p>"
+            f"<pre>{escape(str(payload['report']))}</pre></div>"
+        )
+    if title == "Search Result":
         results = payload.get("results", [])
         if results:
             items = "".join(
@@ -447,6 +859,19 @@ def _render_bucket_option(bucket: object, active_bucket: object) -> str:
     return f'<option value="{escaped_bucket}"{selected}>{escaped_bucket}</option>'
 
 
+def _render_audit_list(events: list[dict[str, object]]) -> str:
+    if not events:
+        return "<li>No audit activity yet.</li>"
+    return "".join(
+        (
+            f"<li>{escape(str(event.get('operation', 'unknown')))} · "
+            f"{escape(str(event.get('outcome', 'unknown')))} · "
+            f"{escape(str(event.get('actor', 'system')))}</li>"
+        )
+        for event in events
+    )
+
+
 def _first_value(values: dict[str, list[str]], key: str) -> str | None:
     matches = values.get(key)
     if not matches:
@@ -460,3 +885,46 @@ def _optional_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _resolve_dashboard_brain_id(
+    payload: dict[str, object], config: NeuroCoreConfig
+) -> str:
+    return str(
+        payload.get("brain_id")
+        or payload.get("namespace")
+        or config.default_namespace
+    )
+
+
+def _dashboard_report_result(
+    payload: dict[str, object],
+    *,
+    store: BaseStore,
+    config: NeuroCoreConfig,
+    semantic_ranker: object | None,
+) -> dict[str, object]:
+    try:
+        return generate_consensus_report(
+            payload,
+            store=store,
+            config=config,
+            semantic_ranker=semantic_ranker,
+        )
+    except PermissionError:
+        briefing = generate_briefing(
+            {
+                "brain_id": payload.get("brain_id"),
+                "query_request": payload.get("query_request"),
+                "include_operator_hints": True,
+                "max_items": payload.get("max_items", 5),
+            },
+            store=store,
+            config=config,
+            semantic_ranker=semantic_ranker,
+        )
+        return {
+            "mode": "fallback-briefing",
+            "report": briefing["briefing"],
+            "metadata": briefing.get("metadata", {}),
+        }

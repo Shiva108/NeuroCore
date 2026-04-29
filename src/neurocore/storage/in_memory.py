@@ -6,14 +6,17 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from neurocore.core import semantic as semantic_runtime
+from neurocore.core.content_normalization import (
+    compute_content_fingerprint,
+    normalize_content,
+)
+from neurocore.core.dedup_index import DedupIndex
 from neurocore.core.models import (
     MemoryChunk,
     MemoryDocument,
     MemoryRecord,
     RetrievalArtifact,
 )
-from neurocore.ingest.normalize import compute_content_fingerprint, normalize_content
-from neurocore.ingest.dedup import DedupIndex
 from neurocore.storage.base import BaseStore, Candidate
 
 

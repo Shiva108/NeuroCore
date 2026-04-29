@@ -79,7 +79,18 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    _add_capture_note_parser(subparsers)
+    _add_capture_file_parser(subparsers)
+    _add_capture_paper_parser(subparsers)
+    _add_capture_hackingagent_parser(subparsers)
+    _add_query_parser(subparsers)
+    _add_briefing_parser(subparsers)
+    _add_report_parser(subparsers)
+    _add_utility_parsers(subparsers)
+    return parser
 
+
+def _add_capture_note_parser(subparsers) -> None:
     note_parser = subparsers.add_parser(
         "capture-note", help="Store a short note or observation."
     )
@@ -90,6 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     note_parser.add_argument("content", help="Note content to store.")
 
+
+def _add_capture_file_parser(subparsers) -> None:
     file_parser = subparsers.add_parser(
         "capture-file",
         help="Store a local file as a note, article digest, playbook, or report.",
@@ -106,6 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the auto-detected content format.",
     )
 
+
+def _add_capture_paper_parser(subparsers) -> None:
     paper_parser = subparsers.add_parser(
         "capture-paper",
         help="Store a scientific paper summary, notes, or arXiv-style digest.",
@@ -149,6 +164,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to a markdown or text file containing extra notes.",
     )
 
+
+def _add_capture_hackingagent_parser(subparsers) -> None:
     agent_parser = subparsers.add_parser(
         "capture-hackingagent",
         help="Store a local hackingagent artifact, session log, or prompt trace.",
@@ -174,6 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Source project name. Defaults to hackingagent.",
     )
 
+
+def _add_query_parser(subparsers) -> None:
     query_parser = subparsers.add_parser(
         "query",
         help="Search across captured security knowledge and agent artifacts.",
@@ -225,6 +244,76 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the retrieval sensitivity ceiling.",
     )
 
+
+def _add_briefing_parser(subparsers) -> None:
+    briefing_parser = subparsers.add_parser(
+        "briefing",
+        help="Generate a compact markdown briefing from NeuroCore query context.",
+    )
+    briefing_parser.add_argument("query_text", help="Search text.")
+    briefing_parser.add_argument(
+        "--namespace",
+        help="Override the default namespace from .env.",
+    )
+    briefing_parser.add_argument(
+        "--brain-id",
+        help="Alias for namespace used by integrations and the reference app.",
+    )
+    briefing_parser.add_argument(
+        "--preset",
+        choices=PRESET_NAMES,
+        help="Apply a saved workflow preset.",
+    )
+    briefing_parser.add_argument(
+        "--bucket",
+        action="append",
+        choices=SECURITY_BUCKETS,
+        default=[],
+        help="Repeat to search one or more buckets. Defaults to preset query buckets.",
+    )
+    briefing_parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="Repeat to match any of these tags.",
+    )
+    briefing_parser.add_argument(
+        "--source-type",
+        action="append",
+        default=[],
+        help="Repeat to filter by source type such as paper or agent_trace.",
+    )
+    briefing_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=8,
+        help="Maximum number of query results to retrieve.",
+    )
+    briefing_parser.add_argument(
+        "--max-items",
+        type=int,
+        default=5,
+        help="Maximum number of retrieved items to include in briefing context.",
+    )
+    briefing_parser.add_argument(
+        "--return-mode",
+        choices=("hybrid", "record_only", "chunk_only", "document_aggregate"),
+        default="hybrid",
+        help="Query response mode.",
+    )
+    briefing_parser.add_argument(
+        "--sensitivity-ceiling",
+        default=None,
+        help="Override the retrieval sensitivity ceiling.",
+    )
+    briefing_parser.add_argument(
+        "--include-operator-hints",
+        action="store_true",
+        help="Include operator retrospective memory when available.",
+    )
+
+
+def _add_report_parser(subparsers) -> None:
     report_parser = subparsers.add_parser(
         "report",
         help="Generate a consensus report from NeuroCore query context.",
@@ -298,13 +387,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional target or engagement label carried with the request.",
     )
 
+
+def _add_utility_parsers(subparsers) -> None:
     subparsers.add_parser(
         "capabilities",
         help="Report helper readiness for sibling bridge integrations.",
     )
     subparsers.add_parser("presets", help="List the saved workflow presets.")
-
-    return parser
 
 
 def _add_capture_args(
@@ -422,6 +511,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "capture-hackingagent":
         path = Path(args.path).expanduser().resolve()
         content = _read_text_file(path, description="hackingagent artifact")
+        artifact_tags = []
+        if args.artifact_type:
+            artifact_tags.extend(
+                [args.artifact_type, f"artifact:{args.artifact_type}"]
+            )
         request = _build_capture_request(
             args,
             content=content,
@@ -433,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
             },
             content_format=_detect_content_format(path),
             title=args.title or path.name,
+            extra_tags=artifact_tags,
         )
         return _run_neurocore(repo_root, env, "capture", request)
 
@@ -448,6 +543,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.target:
             report_request["target"] = args.target
         return _run_neurocore(repo_root, env, ["report", "consensus"], report_request)
+
+    if args.command == "briefing":
+        briefing_request: dict[str, object] = {
+            "query_request": _build_query_request(args, env),
+            "max_items": args.max_items,
+            "include_operator_hints": args.include_operator_hints,
+        }
+        if args.brain_id:
+            briefing_request["brain_id"] = args.brain_id
+        return _run_neurocore(repo_root, env, "briefing", briefing_request)
 
     return _run_neurocore(repo_root, env, "query", _build_query_request(args, env))
 
@@ -503,8 +608,12 @@ def _build_query_request(
         "top_k": args.top_k,
         "return_mode": args.return_mode,
     }
-    if args.namespace:
+    namespace = getattr(args, "namespace", None)
+    brain_id = getattr(args, "brain_id", None)
+    if namespace:
         request["namespace"] = args.namespace
+    elif brain_id:
+        request["namespace"] = brain_id
     if args.tag:
         request["tags_any"] = args.tag
     if args.source_type:
@@ -641,11 +750,13 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
     query_ready = False
     semantic_ready = False
     report_ready = False
+    briefing_ready = False
     report_provider_mode = "disabled"
     config = None
     try:
         config = load_config(env)
         query_ready = True
+        briefing_ready = True
     except ConfigError as exc:
         issues_by_surface["query"].append(str(exc))
 
@@ -658,6 +769,7 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
             semantic_ready = semantic_status == "ready"
             if not semantic_ready:
                 query_ready = False
+                briefing_ready = False
                 if semantic_issue:
                     issues_by_surface["semantic"].append(semantic_issue)
         else:
@@ -665,9 +777,12 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
                 f"Semantic backend {config.semantic_backend} is not recognized."
             )
             query_ready = False
+            briefing_ready = False
         try:
             build_reporter(config)
-            report_ready = True
+            report_ready, report_issue = _check_reporter_health(config)
+            if report_issue:
+                issues_by_surface["report"].append(report_issue)
         except PermissionError:
             issues_by_surface["report"].append("Consensus reporting disabled")
         except ValueError as exc:
@@ -680,6 +795,7 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
         "config_ready": query_ready,
         "default_namespace_ready": default_namespace_ready,
         "consensus_report_ready": report_ready,
+        "briefing_ready": briefing_ready,
         "semantic_ready": semantic_ready,
         "query_ready": query_ready,
         "report_ready": report_ready,
@@ -705,9 +821,37 @@ def _is_local_mock_base_url(base_url: str | None) -> bool:
         return False
     parsed = urlparse(base_url)
     host = (parsed.hostname or "").lower()
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     path = parsed.path.rstrip("/") or "/"
-    return host in {"127.0.0.1", "localhost"} and port == 8787 and path == "/v1"
+    return host in {"127.0.0.1", "localhost"} and path == "/v1"
+
+
+def _check_reporter_health(config) -> tuple[bool, str | None]:
+    base_url = (config.consensus_base_url or "").rstrip("/")
+    if not base_url:
+        return False, "Consensus reporting requires a consensus base URL"
+    headers = {}
+    if config.consensus_api_key:
+        headers["Authorization"] = f"Bearer {config.consensus_api_key}"
+    if _is_local_mock_base_url(base_url):
+        parsed = urlparse(base_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        health_urls = [f"{origin}/health"]
+    else:
+        health_urls = [f"{base_url}/models", f"{base_url}/health"]
+    last_error = "Consensus reporter health check failed"
+    for url in health_urls:
+        req = urllib_request.Request(url=url, headers=headers, method="GET")
+        try:
+            with urllib_request.urlopen(req, timeout=2.0) as response:
+                if 200 <= int(response.status) < 300:
+                    return True, None
+                last_error = (
+                    "Consensus reporter health check returned "
+                    f"HTTP {response.status}"
+                )
+        except urllib_error.URLError as exc:
+            last_error = f"Consensus reporter health check failed: {exc.reason}"
+    return False, last_error
 
 
 def _load_env_file(path: Path) -> dict[str, str]:

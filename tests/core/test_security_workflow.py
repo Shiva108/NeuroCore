@@ -65,10 +65,16 @@ def test_capabilities_reports_ready_config_and_consensus(tmp_path: Path):
         "NEUROCORE_CONSENSUS_API_KEY": "test-key",
     }
 
-    payload = SECURITY_WORKFLOW._capabilities_payload(tmp_path, env)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_check_reporter_health", lambda config: (True, None))
+    try:
+        payload = SECURITY_WORKFLOW._capabilities_payload(tmp_path, env)
+    finally:
+        monkeypatch.undo()
 
     assert payload["config_ready"] is True
     assert payload["query_ready"] is True
+    assert payload["briefing_ready"] is True
     assert payload["report_ready"] is True
     assert payload["semantic_ready"] is True
     assert payload["default_namespace_ready"] is True
@@ -92,10 +98,81 @@ def test_capabilities_reports_mock_local_provider_mode(tmp_path: Path):
         "NEUROCORE_CONSENSUS_API_KEY": "local-dev-key",
     }
 
-    payload = SECURITY_WORKFLOW._capabilities_payload(tmp_path, env)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_check_reporter_health", lambda config: (True, None))
+    try:
+        payload = SECURITY_WORKFLOW._capabilities_payload(tmp_path, env)
+    finally:
+        monkeypatch.undo()
 
     assert payload["report_ready"] is True
+    assert payload["briefing_ready"] is True
     assert payload["report_provider_mode"] == "mock_local"
+
+
+def test_capabilities_marks_report_unready_when_local_mock_health_fails(tmp_path: Path):
+    (tmp_path / ".env").write_text("NEUROCORE_DEFAULT_NAMESPACE=security-lab\n", encoding="utf-8")
+    env = {
+        "NEUROCORE_DEFAULT_NAMESPACE": "security-lab",
+        "NEUROCORE_ALLOWED_BUCKETS": ",".join(SECURITY_WORKFLOW.SECURITY_BUCKETS),
+        "NEUROCORE_DEFAULT_SENSITIVITY": "restricted",
+        "NEUROCORE_SEMANTIC_BACKEND": "none",
+        "NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS": "true",
+        "NEUROCORE_CONSENSUS_PROVIDER": "openai_compatible",
+        "NEUROCORE_CONSENSUS_MODEL_NAMES": "model-a,model-b",
+        "NEUROCORE_CONSENSUS_BASE_URL": SECURITY_WORKFLOW.LOCAL_CONSENSUS_BASE_URL,
+        "NEUROCORE_CONSENSUS_API_KEY": "local-dev-key",
+    }
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW,
+        "_check_reporter_health",
+        lambda config: (False, "mock provider health check failed"),
+    )
+    try:
+        payload = SECURITY_WORKFLOW._capabilities_payload(tmp_path, env)
+    finally:
+        monkeypatch.undo()
+
+    assert payload["query_ready"] is True
+    assert payload["briefing_ready"] is True
+    assert payload["report_ready"] is False
+    assert payload["issues_by_surface"]["report"] == ["mock provider health check failed"]
+
+
+def test_check_reporter_health_uses_root_health_endpoint_for_local_mock(monkeypatch: pytest.MonkeyPatch):
+    class DummyConfig:
+        consensus_base_url = SECURITY_WORKFLOW.LOCAL_CONSENSUS_BASE_URL
+        consensus_api_key = "local-dev-key"
+
+    requested_urls: list[str] = []
+
+    class DummyResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout: float = 0.0):
+        requested_urls.append(request.full_url)
+        return DummyResponse()
+
+    monkeypatch.setattr(SECURITY_WORKFLOW.urllib_request, "urlopen", fake_urlopen)
+
+    ready, issue = SECURITY_WORKFLOW._check_reporter_health(DummyConfig())
+
+    assert ready is True
+    assert issue is None
+    assert requested_urls == ["http://127.0.0.1:8787/health"]
+
+
+def test_is_local_mock_base_url_accepts_ephemeral_local_ports():
+    assert SECURITY_WORKFLOW._is_local_mock_base_url("http://127.0.0.1:39321/v1") is True
+    assert SECURITY_WORKFLOW._is_local_mock_base_url("http://localhost:8080/v1") is True
+    assert SECURITY_WORKFLOW._is_local_mock_base_url("https://api.example.test/v1") is False
 
 
 def test_capabilities_marks_config_unready_when_semantic_backend_dependency_missing(
@@ -119,6 +196,7 @@ def test_capabilities_marks_config_unready_when_semantic_backend_dependency_miss
 
     assert payload["config_ready"] is False
     assert payload["query_ready"] is False
+    assert payload["briefing_ready"] is False
     assert payload["consensus_report_ready"] is False
     assert payload["report_ready"] is False
     assert payload["semantic_ready"] is False
@@ -140,6 +218,7 @@ def test_capabilities_query_ready_without_report_when_consensus_disabled(tmp_pat
 
     assert payload["config_ready"] is True
     assert payload["query_ready"] is True
+    assert payload["briefing_ready"] is True
     assert payload["semantic_ready"] is True
     assert payload["report_ready"] is False
     assert payload["consensus_report_ready"] is False
@@ -163,6 +242,7 @@ def test_capabilities_query_ready_without_report_when_consensus_key_missing(tmp_
     payload = SECURITY_WORKFLOW._capabilities_payload(tmp_path, env)
 
     assert payload["query_ready"] is True
+    assert payload["briefing_ready"] is True
     assert payload["report_ready"] is False
     assert payload["consensus_report_ready"] is False
     assert payload["report_provider_mode"] == "external_openai_compatible"

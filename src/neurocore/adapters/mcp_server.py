@@ -11,6 +11,7 @@ from neurocore.interfaces.admin import (
     reindex_memory,
     update_memory,
 )
+from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.capture import capture_memory
 from neurocore.interfaces.dashboard import build_dashboard_data
 from neurocore.interfaces.ingest import ingest_discord_event, ingest_slack_event
@@ -48,6 +49,16 @@ def create_mcp_server(
         description="Query NeuroCore records or chunks.",
     )
     server.add_tool(
+        lambda request: generate_briefing(
+            request,
+            store=store,
+            config=config,
+            semantic_ranker=semantic_ranker,
+        ),
+        name="generate_briefing",
+        description="Generate a compact markdown briefing from NeuroCore memory.",
+    )
+    server.add_tool(
         lambda request: ingest_slack_event(request, store=store, config=config),
         name="ingest_slack_event",
         description="Ingest a Slack event into NeuroCore.",
@@ -65,17 +76,16 @@ def create_mcp_server(
             name="run_background_summaries",
             description="Run background document summarization.",
         )
-    if config.enable_multi_model_consensus:
-        server.add_tool(
-            lambda request: generate_consensus_report(
-                request,
-                store=store,
-                config=config,
-                semantic_ranker=semantic_ranker,
-            ),
-            name="generate_consensus_report",
-            description="Generate a multi-model consensus report from NeuroCore context.",
-        )
+    server.add_tool(
+        lambda request: generate_consensus_report(
+            request,
+            store=store,
+            config=config,
+            semantic_ranker=semantic_ranker,
+        ),
+        name="generate_consensus_report",
+        description="Generate a report from NeuroCore context, falling back to a synthesized briefing when needed.",
+    )
     if config.enable_dashboard:
         server.add_tool(
             lambda request: build_dashboard_data(store=store, config=config),

@@ -10,3 +10,7 @@ lint:
 
 validate:
 	python -m neurocore.governance.validation
+
+sentrux:
+	sentrux check .
+	sentrux gate .

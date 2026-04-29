@@ -101,24 +101,84 @@ def test_generate_consensus_report_uses_explicit_context_when_provided():
 
 
 def test_generate_consensus_report_requires_enabled_consensus_reporting():
+    store = InMemoryStore()
     config = NeuroCoreConfig(
         default_namespace="project-alpha",
         allowed_buckets=("research",),
         default_sensitivity="standard",
         enable_multi_model_consensus=False,
     )
+    capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "Validated SSRF finding with evidence and remediation notes.",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
 
-    try:
-        generate_consensus_report(
-            {
-                "objective": "Generate a report.",
-                "context_markdown": "Context",
+    response = generate_consensus_report(
+        {
+            "objective": "Generate a report.",
+            "query_request": {
+                "query_text": "SSRF finding",
+                "namespace": "project-alpha",
+                "allowed_buckets": ["research"],
+                "sensitivity_ceiling": "standard",
             },
-            store=InMemoryStore(),
-            config=config,
-            reporter=FakeReporter(),
-        )
-    except PermissionError as exc:
-        assert "Reporting is disabled" in str(exc)
-    else:
-        raise AssertionError("Expected reporting to be gated by configuration")
+        },
+        store=store,
+        config=config,
+        reporter=FakeReporter(),
+    )
+
+    assert response["mode"] == "fallback-briefing"
+    assert response["report"].startswith("## Overview")
+
+
+def test_generate_consensus_report_falls_back_when_reporter_raises():
+    store = InMemoryStore()
+    config = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_multi_model_consensus=True,
+    )
+    capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "research",
+            "sensitivity": "standard",
+            "content": "Validated SSRF finding with evidence and remediation notes.",
+            "content_format": "markdown",
+            "source_type": "note",
+        },
+        store=store,
+        config=config,
+    )
+
+    class FailingReporter:
+        def generate(self, **_kwargs):
+            raise RuntimeError("reporter unavailable")
+
+    response = generate_consensus_report(
+        {
+            "objective": "Generate a report.",
+            "query_request": {
+                "query_text": "SSRF finding",
+                "namespace": "project-alpha",
+                "allowed_buckets": ["research"],
+                "sensitivity_ceiling": "standard",
+            },
+        },
+        store=store,
+        config=config,
+        reporter=FailingReporter(),
+    )
+
+    assert response["mode"] == "fallback-briefing"
+    assert response["metadata"]["fallback_reason"] == "reporter unavailable"

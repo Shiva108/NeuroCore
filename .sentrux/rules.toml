@@ -1,0 +1,64 @@
+# Sentrux architectural rules for NeuroCore
+#
+# This ruleset is intentionally minimal and follows the documented SSD shape:
+# foundational domain/config/storage concerns at the bottom, service modules
+# above them, orchestration interfaces above services, and delivery adapters at
+# the top.
+
+[constraints]
+max_cycles = 0
+max_upward_violations = 0
+no_god_files = true
+max_cc = 20
+max_fn_lines = 120
+
+[[layers]]
+name = "foundation"
+paths = [
+  "src/neurocore/core/*",
+  "src/neurocore/governance/*",
+]
+order = 4
+
+[[layers]]
+name = "storage"
+paths = [
+  "src/neurocore/storage/*",
+]
+order = 3
+
+[[layers]]
+name = "services"
+paths = [
+  "src/neurocore/ingest/*",
+  "src/neurocore/retrieval/*",
+  "src/neurocore/reporting/*",
+  "src/neurocore/summarization/*",
+  "src/neurocore/maintenance/*",
+]
+order = 2
+
+[[layers]]
+name = "orchestration"
+paths = [
+  "src/neurocore/runtime.py",
+  "src/neurocore/interfaces/*",
+]
+order = 1
+
+[[layers]]
+name = "delivery"
+paths = [
+  "src/neurocore/adapters/*",
+]
+order = 0
+
+[[boundaries]]
+from = "src/neurocore/core/*"
+to = "src/neurocore/ingest/*"
+reason = "Foundation config and policies should not depend on ingest services."
+
+[[boundaries]]
+from = "src/neurocore/storage/*"
+to = "src/neurocore/ingest/*"
+reason = "Storage backends should not reach into ingest helpers."
