@@ -20,12 +20,20 @@ async def test_mcp_server_exposes_capture_and_query_tools_only_when_admin_disabl
     tool_names = {tool.name for tool in await server.list_tools()}
 
     assert tool_names == {
+        "archive_brain",
         "capture_memory",
+        "capture_session_event",
+        "checkpoint_session",
+        "create_brain",
         "generate_briefing",
         "generate_consensus_report",
+        "get_brain",
+        "list_brains",
         "list_protocols",
         "query_memory",
+        "resume_session",
         "run_protocol",
+        "update_brain",
         "ingest_slack_event",
         "ingest_discord_event",
     }
@@ -49,11 +57,19 @@ async def test_mcp_server_registers_admin_tools_when_enabled():
     tool_names = {tool.name for tool in await server.list_tools()}
 
     assert {
+        "archive_brain",
         "capture_memory",
+        "capture_session_event",
+        "checkpoint_session",
+        "create_brain",
         "generate_briefing",
         "query_memory",
+        "get_brain",
+        "list_brains",
         "list_protocols",
         "run_protocol",
+        "resume_session",
+        "update_brain",
         "ingest_slack_event",
         "ingest_discord_event",
         "run_background_summaries",

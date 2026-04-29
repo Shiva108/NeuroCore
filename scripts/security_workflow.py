@@ -399,6 +399,39 @@ def _add_utility_parsers(subparsers) -> None:
         help="Start the bundled local mock reporter when local development mode is configured.",
     )
     subparsers.add_parser("presets", help="List the saved workflow presets.")
+    protocol_list_parser = subparsers.add_parser(
+        "protocols",
+        help="List supported named protocols.",
+    )
+    protocol_list_parser.add_argument(
+        "--request-json",
+        default="{}",
+        help="Optional JSON object passed through to the NeuroCore CLI surface.",
+    )
+    protocol_run_parser = subparsers.add_parser(
+        "protocol-run",
+        help="Run a named protocol using the NeuroCore CLI surface.",
+    )
+    protocol_run_parser.add_argument("--request-json", required=True)
+    for name in (
+        "brain-create",
+        "brain-get",
+        "brain-list",
+        "brain-update",
+        "brain-archive",
+        "session-capture",
+        "session-checkpoint",
+        "session-resume",
+    ):
+        child = subparsers.add_parser(
+            name,
+            help=f"Forward {name} to the NeuroCore CLI surface.",
+        )
+        child.add_argument(
+            "--request-json",
+            required=name != "brain-list",
+            default="{}",
+        )
 
 
 def _add_capture_args(
@@ -469,6 +502,40 @@ def main(argv: list[str] | None = None) -> int:
         payload = _report_bootstrap_payload(repo_root, env)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
+
+    if args.command == "protocols":
+        return _run_neurocore(
+            repo_root,
+            env,
+            ["protocol", "list"],
+            _parse_request_object(args.request_json),
+        )
+
+    if args.command == "protocol-run":
+        return _run_neurocore(
+            repo_root,
+            env,
+            ["protocol", "run"],
+            _parse_request_object(args.request_json),
+        )
+
+    forwarded_admin_commands = {
+        "brain-create": ["brain", "create"],
+        "brain-get": ["brain", "get"],
+        "brain-list": ["brain", "list"],
+        "brain-update": ["brain", "update"],
+        "brain-archive": ["brain", "archive"],
+        "session-capture": ["session", "capture-event"],
+        "session-checkpoint": ["session", "checkpoint"],
+        "session-resume": ["session", "resume"],
+    }
+    if args.command in forwarded_admin_commands:
+        return _run_neurocore(
+            repo_root,
+            env,
+            forwarded_admin_commands[args.command],
+            _parse_request_object(args.request_json),
+        )
 
     if args.command == "capture-note":
         request = _build_capture_request(
@@ -623,12 +690,19 @@ def _build_query_request(
     if namespace:
         request["namespace"] = args.namespace
     elif brain_id:
-        request["namespace"] = brain_id
+        request["brain_id"] = brain_id
     if args.tag:
         request["tags_any"] = args.tag
     if args.source_type:
         request["source_types"] = args.source_type
     return request
+
+
+def _parse_request_object(raw: str) -> dict[str, object]:
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise SystemExit("--request-json must decode to an object")
+    return payload
 
 
 def _merge_metadata(raw_json: str, extra: dict[str, object]) -> dict[str, object]:

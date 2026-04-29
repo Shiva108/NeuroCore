@@ -54,6 +54,44 @@ def test_run_protocol_cti_review_v1_returns_protocol_payload_with_required_secti
 def test_list_protocols_returns_supported_protocol_manifests():
     protocols = list_protocols()
 
-    assert len(protocols) >= 1
+    assert len(protocols) >= 5
     names = {protocol["name"] for protocol in protocols}
+    assert "resume-brain-v1" in names
+    assert "project-review-v1" in names
+    assert "memory-audit-v1" in names
     assert "cti-review-v1" in names
+    assert "engagement-review-v1" in names
+
+
+def test_run_protocol_resume_brain_v1_returns_required_sections():
+    store = InMemoryStore()
+    config = build_config()
+    capture_memory(
+        {
+            "namespace": "security-lab",
+            "bucket": "agents",
+            "sensitivity": "restricted",
+            "content": "Checkpoint: validated auth bypass path and queued retest.",
+            "content_format": "markdown",
+            "source_type": "session_checkpoint",
+            "tags": ["artifact:session-checkpoint", "session-id:sess-1"],
+        },
+        store=store,
+        config=config,
+    )
+
+    response = run_protocol(
+        {
+            "name": "resume-brain-v1",
+            "namespace": "security-lab",
+            "query_text": "auth bypass checkpoint",
+            "allowed_buckets": ["agents"],
+        },
+        store=store,
+        config=config,
+    )
+
+    assert response["protocol"]["name"] == "resume-brain-v1"
+    assert "## Overview" in response["report"]
+    assert "## Relevant Memory" in response["report"]
+    assert "## Next Actions" in response["report"]

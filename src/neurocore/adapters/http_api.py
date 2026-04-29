@@ -547,21 +547,65 @@ def _build_dashboard_payload(
     config: NeuroCoreConfig,
 ) -> dict[str, object]:
     for suffix, builder in (
+        ("/brain/create", _build_brain_create_form_payload),
+        ("/brain/archive", _build_brain_archive_form_payload),
         ("/capture", _build_capture_form_payload),
         ("/query", _build_query_form_payload),
         ("/briefing", _build_briefing_form_payload),
         ("/report", _build_report_form_payload),
+        ("/protocol/run", _build_protocol_form_payload),
+        ("/session/resume", _build_session_resume_form_payload),
         ("/update", _build_update_form_payload),
+        ("/reindex", _build_reindex_form_payload),
+        ("/audit", _build_audit_form_payload),
+        ("/delete", _build_delete_form_payload),
     ):
         if path.endswith(suffix):
             return builder(form_values, config)
-    return _build_delete_form_payload(form_values, config)
+    return _build_query_form_payload(form_values, config)
+
+
+def _build_brain_create_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    brain_id = _first_value(form_values, "brain_id") or _form_namespace(
+        form_values, config
+    )
+    namespace = _first_value(form_values, "namespace") or brain_id
+    owner = _first_value(form_values, "owner")
+    tags = _split_csv_values(_first_value(form_values, "tags"))
+    return {
+        "brain_id": brain_id,
+        "namespace": namespace,
+        "display_name": _first_value(form_values, "display_name") or brain_id,
+        "description": _first_value(form_values, "description") or "",
+        "owner": owner,
+        "tags": tags,
+        "default_allowed_buckets": _split_csv_values(
+            _first_value(form_values, "default_allowed_buckets")
+        )
+        or list(config.allowed_buckets),
+    }
+
+
+def _build_brain_archive_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    del config
+    return {
+        "brain_id": _first_value(form_values, "brain_id"),
+        "reason": _first_value(form_values, "reason") or "dashboard archive",
+    }
 
 
 def _build_capture_form_payload(
     form_values: FormValues, config: NeuroCoreConfig
 ) -> dict[str, object]:
+    brain_id = _first_value(form_values, "brain_id") or _form_namespace(
+        form_values, config
+    )
     return {
+        "brain_id": brain_id,
         "namespace": _first_value(form_values, "namespace") or None,
         "bucket": _first_value(form_values, "bucket"),
         "sensitivity": _first_value(form_values, "sensitivity"),
@@ -633,6 +677,8 @@ def _build_query_request_from_form(
 ) -> dict[str, object]:
     allowed_buckets = _form_allowed_buckets(form_values, config)
     return {
+        "brain_id": _first_value(form_values, "brain_id")
+        or _form_namespace(form_values, config),
         "query_text": _first_value(form_values, "query_text"),
         "namespace": _form_namespace(form_values, config),
         "allowed_buckets": allowed_buckets,
@@ -651,7 +697,60 @@ def _form_allowed_buckets(
 
 
 def _form_namespace(form_values: FormValues, config: NeuroCoreConfig) -> str:
-    return _first_value(form_values, "namespace") or config.default_namespace
+    return (
+        _first_value(form_values, "namespace")
+        or _first_value(form_values, "brain_id")
+        or config.default_namespace
+    )
+
+
+def _split_csv_values(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [value.strip() for value in raw.split(",") if value.strip()]
+
+
+def _build_protocol_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    payload = _build_query_request_from_form(form_values, config)
+    payload["name"] = _first_value(form_values, "name") or "resume-brain-v1"
+    payload["objective"] = _first_value(form_values, "objective") or None
+    payload["max_items"] = int(_first_value(form_values, "max_items") or 8)
+    payload["session_id"] = _first_value(form_values, "session_id")
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _build_session_resume_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    payload = _build_query_request_from_form(form_values, config)
+    payload["session_id"] = _first_value(form_values, "session_id")
+    payload["source_client"] = _first_value(form_values, "source_client")
+    payload["max_items"] = int(_first_value(form_values, "max_items") or 6)
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _build_reindex_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    del config
+    ids = _first_value(form_values, "ids") or ""
+    return {
+        "ids": [value.strip() for value in ids.split(",") if value.strip()],
+        "scope": _first_value(form_values, "scope") or "records",
+    }
+
+
+def _build_audit_form_payload(
+    form_values: FormValues, config: NeuroCoreConfig
+) -> dict[str, object]:
+    return {
+        "brain_id": _first_value(form_values, "brain_id")
+        or _form_namespace(form_values, config),
+        "namespace": _form_namespace(form_values, config),
+        "allowed_buckets": _form_allowed_buckets(form_values, config),
+    }
 
 
 def _render_reference_app(
@@ -662,6 +761,9 @@ def _render_reference_app(
     query_result: dict[str, object] | None,
     briefing_result: dict[str, object] | None,
     report_result: dict[str, object] | None,
+    brain_result: dict[str, object] | None,
+    session_result: dict[str, object] | None,
+    protocol_result: dict[str, object] | None,
     admin_result: dict[str, object] | None,
     active_brain_id: str,
 ) -> str:
@@ -673,9 +775,14 @@ def _render_reference_app(
     query_feedback = _render_result_block("Search Result", query_result)
     briefing_feedback = _render_result_block("Briefing Result", briefing_result)
     report_feedback = _render_result_block("Report Result", report_result)
+    brain_feedback = _render_result_block("Brain Result", brain_result)
+    session_feedback = _render_result_block("Session Result", session_result)
+    protocol_feedback = _render_result_block("Protocol Result", protocol_result)
     admin_feedback = _render_result_block("Admin Result", admin_result)
     recent_documents = _render_document_list(data["recent_documents"])
     recent_records = _render_record_list(data.get("recent_records", []))
+    brains = _render_brain_list(data.get("brains", []), active_brain_id)
+    connectors = _render_connector_list(data.get("connectors", []))
     stats_line = (
         f"Records: {stats['record_count']} | Documents: {stats['document_count']} | "
         f"Summarized: {stats['summarized_document_count']}"
@@ -690,6 +797,7 @@ def _render_reference_app(
     bucket_options = "".join(
         _render_bucket_option(bucket, active_bucket) for bucket in available_buckets
     )
+    protocol_options = "".join(_render_protocol_option(protocol) for protocol in list_protocols())
     sensitivity_filter_input = _render_sensitivity_filter_input(default_sensitivity)
     admin_section = (
         _render_admin_section(brain_id, active_bucket) if config.enable_admin_surface else ""
@@ -702,6 +810,7 @@ def _render_reference_app(
         <p>{stats_line}</p>
         <p>{production_line}</p>
         {_render_brain_selector_section(brain_id, active_bucket)}
+        {_render_brain_management_section(brain_id, allowed_bucket_values, brain_feedback)}
         {_render_capture_section(
             brain_id,
             capture_bucket,
@@ -730,7 +839,26 @@ def _render_reference_app(
             active_bucket,
             report_feedback,
         )}
+        {_render_protocol_section(
+            brain_id,
+            allowed_bucket_values,
+            sensitivity_filter_input,
+            active_bucket,
+            protocol_options,
+            protocol_feedback,
+        )}
+        {_render_session_resume_section(
+            brain_id,
+            allowed_bucket_values,
+            sensitivity_filter_input,
+            active_bucket,
+            session_feedback,
+        )}
         {_render_filter_section(bucket_options)}
+        <section>
+          <h2>Brains</h2>
+          <ul>{brains}</ul>
+        </section>
         <section>
           <h2>Recent Memory</h2>
           <ul>{recent_records}</ul>
@@ -742,6 +870,10 @@ def _render_reference_app(
         <section>
           <h2>Recent Memory / Audit</h2>
           <ul>{_render_audit_list(data.get("recent_audit_events", []))}</ul>
+        </section>
+        <section>
+          <h2>Connector Status</h2>
+          <ul>{connectors}</ul>
         </section>
         {admin_section}
         {admin_feedback}
@@ -772,6 +904,32 @@ def _render_brain_selector_section(brain_id: str, active_bucket: object) -> str:
     """
 
 
+def _render_brain_management_section(
+    brain_id: str, allowed_bucket_values: str, brain_feedback: str
+) -> str:
+    return f"""
+        <section>
+          <h2>Brain Management</h2>
+          <form method="post" action="/dashboard/brain/create">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
+            <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
+            <label>Display name <input type="text" name="display_name" value="{brain_id}" /></label>
+            <label>Description <input type="text" name="description" value="OpenBrain workspace" /></label>
+            <label>Owner <input type="text" name="owner" value="dashboard" /></label>
+            <label>Tags <input type="text" name="tags" value="openbrain,reference-app" /></label>
+            <label>Default buckets <input type="text" name="default_allowed_buckets" value="{allowed_bucket_values}" /></label>
+            <button type="submit">Create / Refresh Brain</button>
+          </form>
+          <form method="post" action="/dashboard/brain/archive">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
+            <label>Reason <input type="text" name="reason" value="dashboard archive" /></label>
+            <button type="submit">Archive Brain</button>
+          </form>
+          {brain_feedback}
+        </section>
+    """
+
+
 def _render_capture_section(
     brain_id: str,
     capture_bucket: str,
@@ -783,6 +941,7 @@ def _render_capture_section(
         <section>
           <h2>Capture Memory</h2>
           <form method="post" action="/dashboard/capture">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
             <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
             <label>Bucket <input type="text" name="bucket" value="{capture_bucket}" /></label>
             <label>Sensitivity <input type="text" name="sensitivity" value="{default_sensitivity}" /></label>
@@ -809,6 +968,7 @@ def _render_search_section(
         <section>
           <h2>Search Memory</h2>
           <form method="post" action="/dashboard/query">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
             <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
             <label>Query text <input type="text" name="query_text" /></label>
             <label>Allowed buckets <input type="text" name="allowed_buckets" value="{allowed_bucket_values}" /></label>
@@ -867,6 +1027,63 @@ def _render_report_section(
             <button type="submit">Generate Report</button>
           </form>
           {report_feedback}
+        </section>
+    """
+
+
+def _render_protocol_section(
+    brain_id: str,
+    allowed_bucket_values: str,
+    sensitivity_filter_input: str,
+    active_bucket: object,
+    protocol_options: str,
+    protocol_feedback: str,
+) -> str:
+    return f"""
+        <section>
+          <h2>Protocol Launcher</h2>
+          <form method="post" action="/dashboard/protocol/run">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
+            <label>Protocol
+              <select name="name">
+                {protocol_options}
+              </select>
+            </label>
+            <label>Query text <input type="text" name="query_text" value="critical memory and next actions" /></label>
+            <label>Objective <input type="text" name="objective" value="Summarize the most relevant memory and next actions." /></label>
+            <label>Session ID <input type="text" name="session_id" value="default-session" /></label>
+            <label>Allowed buckets <input type="text" name="allowed_buckets" value="{allowed_bucket_values}" /></label>
+            {sensitivity_filter_input}
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Run Protocol</button>
+          </form>
+          {protocol_feedback}
+        </section>
+    """
+
+
+def _render_session_resume_section(
+    brain_id: str,
+    allowed_bucket_values: str,
+    sensitivity_filter_input: str,
+    active_bucket: object,
+    session_feedback: str,
+) -> str:
+    return f"""
+        <section>
+          <h2>Session Resume</h2>
+          <form method="post" action="/dashboard/session/resume">
+            <label>Brain ID <input type="text" name="brain_id" value="{brain_id}" /></label>
+            <label>Namespace <input type="text" name="namespace" value="{brain_id}" /></label>
+            <label>Session ID <input type="text" name="session_id" value="default-session" /></label>
+            <label>Source client <input type="text" name="source_client" value="dashboard" /></label>
+            <label>Query text <input type="text" name="query_text" value="session checkpoint summary" /></label>
+            <label>Allowed buckets <input type="text" name="allowed_buckets" value="{allowed_bucket_values}" /></label>
+            {sensitivity_filter_input}
+            <input type="hidden" name="bucket_filter" value="{escape(str(active_bucket))}" />
+            <button type="submit">Resume Session</button>
+          </form>
+          {session_feedback}
         </section>
     """
 
@@ -989,6 +1206,40 @@ def _render_record_list(records: list[dict[str, object]]) -> str:
         )
         for item in records
     )
+
+
+def _render_brain_list(brains: list[dict[str, object]], active_brain_id: str) -> str:
+    if not brains:
+        return "<li>No brains yet.</li>"
+    return "".join(
+        (
+            f"<li><strong>{escape(str(item.get('brain_id', 'unknown')))}</strong> "
+            f"({escape(str(item.get('status', 'active')))}) -> "
+            f"{escape(str(item.get('namespace', 'unknown')))}"
+            f"{' [active]' if str(item.get('brain_id')) == active_brain_id else ''}</li>"
+        )
+        for item in brains
+    )
+
+
+def _render_connector_list(connectors: list[dict[str, object]]) -> str:
+    if not connectors:
+        return "<li>No connector metadata found.</li>"
+    return "".join(
+        (
+            f"<li><strong>{escape(str(item.get('name', item.get('slug', 'unknown'))))}</strong> "
+            f"{'runnable' if item.get('runnable') else 'metadata-only'}"
+            f" - {escape(str(item.get('description') or ''))}"
+            f" - capabilities: {escape(', '.join(str(cap) for cap in item.get('capabilities', [])))}</li>"
+        )
+        for item in connectors
+    )
+
+
+def _render_protocol_option(protocol: dict[str, object]) -> str:
+    name = escape(str(protocol.get("name") or "unknown"))
+    purpose = escape(str(protocol.get("purpose") or ""))
+    return f'<option value="{name}">{name} - {purpose}</option>'
 
 
 def _render_bucket_option(bucket: object, active_bucket: object) -> str:

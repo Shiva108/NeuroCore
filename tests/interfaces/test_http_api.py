@@ -201,6 +201,50 @@ def test_http_api_protocol_list_route_returns_protocol_manifests():
     assert "cti-review-v1" in names
 
 
+def test_http_api_brain_lifecycle_and_session_resume_routes_work_end_to_end():
+    store = InMemoryStore()
+    app = create_app(store=store, config=build_config())
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/brains/create",
+        json={
+            "brain_id": "brain-alpha",
+            "namespace": "project-alpha",
+            "display_name": "Project Alpha",
+            "description": "Primary OpenBrain workspace",
+        },
+    )
+    checkpoint_response = client.post(
+        "/sessions/checkpoint",
+        json={
+            "brain_id": "brain-alpha",
+            "session_id": "sess-1",
+            "source_client": "claude-desktop",
+            "content": "Validated auth bypass lead and next steps.",
+            "bucket": "research",
+        },
+    )
+    resume_response = client.post(
+        "/sessions/resume",
+        json={
+            "brain_id": "brain-alpha",
+            "session_id": "sess-1",
+            "query_text": "auth bypass",
+            "allowed_buckets": ["research"],
+            "sensitivity_ceiling": "standard",
+        },
+    )
+
+    assert create_response.status_code == 200
+    assert create_response.json()["brain"]["brain_id"] == "brain-alpha"
+    assert checkpoint_response.status_code == 200
+    assert checkpoint_response.json()["stored"] is True
+    assert resume_response.status_code == 200
+    assert resume_response.json()["session_id"] == "sess-1"
+    assert "auth bypass" in resume_response.json()["briefing"].lower()
+
+
 def test_http_api_briefing_route_delegates_to_briefing_interface(monkeypatch):
     called: dict[str, object] = {}
 

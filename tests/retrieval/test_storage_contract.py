@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from neurocore.core.models import MemoryChunk, MemoryDocument, MemoryRecord
+from neurocore.core.models import BrainManifest, MemoryChunk, MemoryDocument, MemoryRecord
 from neurocore.storage.in_memory import InMemoryStore
 from neurocore.storage.router import RoutedStore
 from neurocore.storage.sqlite_store import SQLiteStore
@@ -58,6 +58,39 @@ def test_in_memory_store_tracks_audit_events():
     event = store.audit_events[0]
     assert event["actor"] == "tester"
     assert event["operation"] == "reindex"
+
+
+def test_in_memory_store_supports_brain_lifecycle_round_trip():
+    store = InMemoryStore()
+    brain = BrainManifest(
+        brain_id="brain-alpha",
+        namespace="project-alpha",
+        display_name="Project Alpha",
+        description="Primary engagement memory",
+        status="active",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        owner="analyst",
+        tags=("alpha",),
+        default_allowed_buckets=("research", "reports"),
+        metadata={"source": "test"},
+    )
+
+    store.save_brain(brain)
+    fetched = store.get_brain("brain-alpha")
+    updated = store.update_brain(
+        "brain-alpha",
+        {"display_name": "Project Alpha Updated", "tags": ("alpha", "priority")},
+    )
+    archived = store.archive_brain("brain-alpha", reason="completed")
+
+    assert fetched is not None
+    assert fetched.namespace == "project-alpha"
+    assert updated.display_name == "Project Alpha Updated"
+    assert "priority" in updated.tags
+    assert archived.status == "archived"
+    assert store.list_brains(include_archived=False) == []
+    assert len(store.list_brains(include_archived=True)) == 1
 
 
 def test_in_memory_store_hides_soft_deleted_documents_by_default():
@@ -267,6 +300,40 @@ def test_sqlite_store_hard_delete_clears_dedup_index(tmp_path):
         )
         is None
     )
+
+
+def test_sqlite_store_persists_brain_lifecycle(tmp_path):
+    database_path = tmp_path / "neurocore.db"
+    store = SQLiteStore(database_path)
+    brain = BrainManifest(
+        brain_id="brain-sqlite",
+        namespace="project-sqlite",
+        display_name="Project SQLite",
+        description="SQLite-backed brain",
+        status="active",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        owner="analyst",
+        tags=("sqlite",),
+        default_allowed_buckets=("research", "reports"),
+        metadata={"source": "sqlite-test"},
+    )
+
+    store.save_brain(brain)
+    reloaded = SQLiteStore(database_path)
+    fetched = reloaded.get_brain("brain-sqlite")
+    updated = reloaded.update_brain(
+        "brain-sqlite",
+        {"description": "Updated SQLite-backed brain"},
+    )
+    archived = reloaded.archive_brain("brain-sqlite", reason="complete")
+
+    assert fetched is not None
+    assert fetched.namespace == "project-sqlite"
+    assert updated.description == "Updated SQLite-backed brain"
+    assert archived.status == "archived"
+    assert reloaded.list_brains(include_archived=False) == []
+    assert len(reloaded.list_brains(include_archived=True)) == 1
 
 
 def test_routed_store_sends_sealed_content_to_the_sealed_backend(tmp_path):

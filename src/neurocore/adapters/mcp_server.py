@@ -158,7 +158,12 @@ def create_mcp_server(
     )
     if config.enable_dashboard:
         server.add_tool(
-            lambda request: build_dashboard_data(store=store, config=config),
+            lambda request: build_dashboard_data(
+                store=store,
+                config=config,
+                bucket_filter=str(request.get("bucket_filter") or "").strip() or None,
+                brain_id=str(request.get("brain_id") or "").strip() or None,
+            ),
             name="dashboard_data",
             description="Return dashboard data for NeuroCore.",
         )

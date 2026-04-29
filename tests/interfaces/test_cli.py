@@ -323,6 +323,85 @@ def test_cli_protocol_run_command_returns_protocol_payload():
     assert "## Findings" in payload["report"]
 
 
+def test_cli_brain_and_session_commands_work_end_to_end():
+    store = InMemoryStore()
+    config = build_config()
+
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "brain",
+            "create",
+            "--request-json",
+            json.dumps(
+                {
+                    "brain_id": "brain-alpha",
+                    "namespace": "project-alpha",
+                    "display_name": "Project Alpha",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    create_payload = json.loads(stdout.getvalue())
+    assert create_payload["brain"]["brain_id"] == "brain-alpha"
+
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "session",
+            "checkpoint",
+            "--request-json",
+            json.dumps(
+                {
+                    "brain_id": "brain-alpha",
+                    "session_id": "sess-1",
+                    "source_client": "claude-desktop",
+                    "content": "Checkpointed auth bypass investigation.",
+                    "bucket": "research",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    checkpoint_payload = json.loads(stdout.getvalue())
+    assert checkpoint_payload["stored"] is True
+
+    stdout = io.StringIO()
+    exit_code = main(
+        [
+            "session",
+            "resume",
+            "--request-json",
+            json.dumps(
+                {
+                    "brain_id": "brain-alpha",
+                    "session_id": "sess-1",
+                    "query_text": "auth bypass",
+                    "allowed_buckets": ["research"],
+                    "sensitivity_ceiling": "standard",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+        stdout=stdout,
+    )
+
+    assert exit_code == 0
+    resume_payload = json.loads(stdout.getvalue())
+    assert resume_payload["session_id"] == "sess-1"
+    assert "auth bypass" in resume_payload["briefing"].lower()
+
+
 def test_cli_report_consensus_command_falls_back_to_briefing_when_disabled():
     store = InMemoryStore()
     config = NeuroCoreConfig(

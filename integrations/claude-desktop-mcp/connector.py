@@ -17,8 +17,11 @@ if str(SRC_ROOT) not in sys.path:
 
 from neurocore.adapters.mcp_server import create_mcp_server
 from neurocore.core.config import NeuroCoreConfig, load_config
+from neurocore.interfaces.brains import list_brains
 from neurocore.interfaces.briefing import generate_briefing
-from neurocore.interfaces.protocols import run_protocol
+from neurocore.interfaces.protocols import list_protocols, run_protocol
+from neurocore.interfaces.reporting import generate_consensus_report
+from neurocore.interfaces.sessions import resume_session
 from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
 
@@ -27,10 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python integrations/claude-desktop-mcp/connector.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("describe-tools")
+    subparsers.add_parser("list-protocols")
+    subparsers.add_parser("list-brains")
     config_parser = subparsers.add_parser("claude-config")
     config_parser.add_argument("--command", default="neurocore")
     config_parser.add_argument("--transport", default="stdio")
-    for name in ("briefing", "protocol"):
+    for name in ("briefing", "protocol", "report", "session-resume"):
         child = subparsers.add_parser(name)
         child.add_argument("--request-json", required=True)
     return parser
@@ -52,6 +57,10 @@ def main(
     if args.command == "describe-tools":
         server = create_mcp_server(store=store, config=config)
         payload = {"tools": asyncio.run(_list_tool_names(server))}
+    elif args.command == "list-protocols":
+        payload = {"protocols": list_protocols()}
+    elif args.command == "list-brains":
+        payload = list_brains({"include_archived": True}, store=store)
     elif args.command == "claude-config":
         payload = {
             "mcpServers": {
@@ -70,6 +79,15 @@ def main(
                 config=config,
                 semantic_ranker=semantic_ranker,
             )
+        elif args.command == "report":
+            payload = generate_consensus_report(
+                request,
+                store=store,
+                config=config,
+                semantic_ranker=semantic_ranker,
+            )
+        elif args.command == "session-resume":
+            payload = resume_session(request, store=store, config=config)
         else:
             payload = run_protocol(
                 request,

@@ -15,10 +15,12 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from neurocore.core.config import NeuroCoreConfig, load_config
+from neurocore.interfaces.brains import create_brain, list_brains
 from neurocore.interfaces.ingest import ingest_discord_event
 from neurocore.interfaces.protocols import run_protocol
 from neurocore.interfaces.query import query_memory
 from neurocore.interfaces.reporting import generate_consensus_report
+from neurocore.interfaces.sessions import capture_session_event, resume_session
 from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
 
@@ -26,9 +28,19 @@ from neurocore.storage.base import BaseStore
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python integrations/discord-connector/connector.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("ingest", "query", "report", "protocol"):
+    subparsers.add_parser("health")
+    for name in (
+        "ingest",
+        "query",
+        "report",
+        "protocol",
+        "create-brain",
+        "list-brains",
+        "session-capture",
+        "session-resume",
+    ):
         child = subparsers.add_parser(name)
-        child.add_argument("--request-json", required=True)
+        child.add_argument("--request-json", required=name != "list-brains")
     return parser
 
 
@@ -43,31 +55,56 @@ def main(
     config = config or load_config()
     store = store or build_store(config)
     semantic_ranker = build_semantic_ranker(config)
-    request = _parse_request(args.request_json)
-
-    if args.command == "ingest":
-        response = ingest_discord_event(request, store=store, config=config)
-    elif args.command == "query":
-        response = query_memory(
-            request,
-            store=store,
-            config=config,
-            semantic_ranker=semantic_ranker,
-        )
-    elif args.command == "report":
-        response = generate_consensus_report(
-            request,
-            store=store,
-            config=config,
-            semantic_ranker=semantic_ranker,
-        )
+    if args.command == "health":
+        response = {
+            "connector": "discord",
+            "runnable": True,
+            "capabilities": [
+                "ingest",
+                "query",
+                "report",
+                "protocol",
+                "brain-management",
+                "session-memory",
+            ],
+        }
     else:
-        response = run_protocol(
-            request,
-            store=store,
-            config=config,
-            semantic_ranker=semantic_ranker,
-        )
+        request = _parse_request(args.request_json or "{}")
+        if args.command == "ingest":
+            response = ingest_discord_event(request, store=store, config=config)
+        elif args.command == "query":
+            response = query_memory(
+                request,
+                store=store,
+                config=config,
+                semantic_ranker=semantic_ranker,
+            )
+        elif args.command == "report":
+            response = generate_consensus_report(
+                request,
+                store=store,
+                config=config,
+                semantic_ranker=semantic_ranker,
+            )
+        elif args.command == "create-brain":
+            response = create_brain(
+                request,
+                store=store,
+                default_allowed_buckets=config.allowed_buckets,
+            )
+        elif args.command == "list-brains":
+            response = list_brains(request, store=store)
+        elif args.command == "session-capture":
+            response = capture_session_event(request, store=store, config=config)
+        elif args.command == "session-resume":
+            response = resume_session(request, store=store, config=config)
+        else:
+            response = run_protocol(
+                request,
+                store=store,
+                config=config,
+                semantic_ranker=semantic_ranker,
+            )
 
     output = stdout or sys.stdout
     output.write(json.dumps(response))

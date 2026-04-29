@@ -74,6 +74,67 @@ def test_slack_connector_ingests_and_queries_end_to_end():
     assert query_payload["results"][0]["namespace"] == "slack-t123"
 
 
+def test_slack_connector_supports_brain_management_and_session_resume():
+    connector = _load_connector("integrations/slack-connector/connector.py")
+    store = InMemoryStore()
+    config = _config()
+
+    create_payload = connector.run_for_test(
+        [
+            "create-brain",
+            "--request-json",
+            json.dumps(
+                {
+                    "brain_id": "slack-incident",
+                    "namespace": "slack-incident",
+                    "display_name": "Slack Incident",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+    )
+    capture_payload = connector.run_for_test(
+        [
+            "session-capture",
+            "--request-json",
+            json.dumps(
+                {
+                    "brain_id": "slack-incident",
+                    "session_id": "sess-1",
+                    "source_client": "slack",
+                    "summary": "Checkpoint: validated incident timeline and next escalation.",
+                    "workflow_stage": "triage",
+                    "importance": "high",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+    )
+    resume_payload = connector.run_for_test(
+        [
+            "session-resume",
+            "--request-json",
+            json.dumps(
+                {
+                    "brain_id": "slack-incident",
+                    "session_id": "sess-1",
+                    "query_text": "incident timeline",
+                    "allowed_buckets": ["agents"],
+                    "sensitivity_ceiling": "restricted",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+    )
+
+    assert create_payload["brain"]["brain_id"] == "slack-incident"
+    assert capture_payload["stored"] is True
+    assert "incident timeline" in resume_payload["briefing"].lower()
+
+
 def test_discord_connector_ingests_and_runs_protocol():
     connector = _load_connector("integrations/discord-connector/connector.py")
     store = InMemoryStore()
@@ -168,3 +229,51 @@ def test_claude_desktop_connector_lists_tools_and_runs_protocol():
     assert "generate_briefing" in tools_payload["tools"]
     assert protocol_payload["protocol"]["prioritization_strategy"] == "severity+intel-tags+operator-concern"
     assert "## Actions" in protocol_payload["report"]
+
+
+def test_claude_desktop_connector_lists_protocols_and_resumes_sessions():
+    connector = _load_connector("integrations/claude-desktop-mcp/connector.py")
+    store = InMemoryStore()
+    config = _config()
+    capture_memory(
+        {
+            "namespace": "project-alpha",
+            "bucket": "agents",
+            "sensitivity": "restricted",
+            "content": "Checkpoint: validated auth bypass chain and queued exploit retest.",
+            "content_format": "markdown",
+            "source_type": "session_checkpoint",
+            "tags": ["artifact:session-checkpoint", "session-id:sess-1"],
+        },
+        store=store,
+        config=config,
+    )
+
+    protocols_payload = connector.run_for_test(
+        ["list-protocols"],
+        store=store,
+        config=config,
+    )
+    resume_payload = connector.run_for_test(
+        [
+            "session-resume",
+            "--request-json",
+            json.dumps(
+                {
+                    "namespace": "project-alpha",
+                    "session_id": "sess-1",
+                    "query_text": "auth bypass chain",
+                    "allowed_buckets": ["agents"],
+                    "sensitivity_ceiling": "restricted",
+                }
+            ),
+        ],
+        store=store,
+        config=config,
+    )
+
+    assert any(
+        protocol["name"] == "resume-brain-v1"
+        for protocol in protocols_payload["protocols"]
+    )
+    assert "auth bypass chain" in resume_payload["briefing"].lower()
