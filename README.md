@@ -6,9 +6,10 @@
 
 NeuroCore is a Python package for capturing, storing, querying, and governing
 policy-aware memory artifacts. The current repository includes a working core
-library, a CLI entrypoint, FastAPI and MCP adapter factories, multiple storage
-backends, ingestion helpers for Slack and Discord payloads, and automated tests
-covering the main subsystem contracts.
+library, a CLI entrypoint, FastAPI and MCP adapters, multiple storage
+backends, synthesized briefing and reporting flows, ingestion helpers for Slack
+and Discord payloads, and automated tests covering the main subsystem
+contracts.
 
 **Version:** `0.1.0`  
 Declared in [pyproject.toml](pyproject.toml).
@@ -19,6 +20,7 @@ Main capabilities currently present in the repository:
 
 - Capture notes and longer documents into record or document storage paths.
 - Query stored content with metadata filters and optional semantic ranking.
+- Generate synthesized briefings from durable memory for compact handoffs.
 - Route storage to in-memory, SQLite, or Postgres-backed primary and sealed
   stores.
 - Expose the same core behavior through library, CLI, HTTP, and MCP surfaces.
@@ -51,6 +53,14 @@ Main capabilities currently present in the repository:
 ├── tests/                 # Pytest suite grouped by subsystem
 ├── scripts/               # Local bootstrap and repo helper scripts
 ├── assets/screenshots/    # README visuals
+├── docs/ssd/              # Architecture/specification source of truth
+├── dashboards/            # Dashboard contribution surface and templates
+├── extensions/            # Extension contribution surface and templates
+├── integrations/          # Starter integrations and templates
+├── primitives/            # Primitive building blocks and templates
+├── recipes/               # Runnable workflow recipes
+├── schemas/               # Metadata schemas and templates
+├── skills/                # Skill definitions and templates
 ├── .github/               # CI workflow, PR template, metadata schema
 ├── .claude/commands/      # AI-assisted slash-command prompts used in this repo
 ├── pyproject.toml         # Packaging metadata, dependencies, tool config
@@ -117,7 +127,7 @@ step-by-step flow in [docs/setup.md](docs/setup.md).
 
 ### Optional Extras
 
-The bootstrap already installs the semantic extra by default for local security
+The bootstrap already installs the semantic extra by default for local
 workflows. If you are following the manual path and want the
 `sentence-transformers` ranker:
 
@@ -167,6 +177,12 @@ Check the current state at any time:
 neurocore --help
 ```
 
+### Generate a briefing
+
+```bash
+neurocore briefing --request-json '{"query_text":"recon status","allowed_buckets":["recon","findings"],"sensitivity_ceiling":"restricted"}'
+```
+
 ### Run structural quality checks
 
 ```bash
@@ -194,8 +210,10 @@ neurocore query --request-json '{"query_text":"recon","allowed_buckets":["recon"
 ### Generate a consensus report
 
 Consensus reporting must be enabled first with
-`NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS=true` plus the configured provider,
-model names, base URL, and API key. For local development, you can start the
+`NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS=true` plus
+`NEUROCORE_CONSENSUS_PROVIDER=openai_compatible`,
+`NEUROCORE_CONSENSUS_MODEL_NAMES`, `NEUROCORE_CONSENSUS_BASE_URL`, and
+`NEUROCORE_CONSENSUS_API_KEY`. For local development, you can start the
 bundled mock provider with `./.venv/bin/python scripts/mock_openai_compatible.py`.
 
 If you want a real external provider instead of the local mock, start from
@@ -208,6 +226,35 @@ neurocore report consensus --request-json '{"objective":"Generate a pentest revi
 If consensus reporting is disabled or the provider is unavailable, the same
 report path now returns a synthesized markdown briefing payload with
 `"mode":"fallback-briefing"` instead of hard failing.
+
+### Run the dashboard-enabled reference app
+
+Enable the HTTP adapter in your environment, then run the blessed serve path:
+
+```bash
+neurocore serve http --host 127.0.0.1 --port 8000
+```
+
+If you want the checkout-safe wrapper that loads the repo environment for you,
+use:
+
+```bash
+python scripts/neurocore_checkout.py serve http --host 127.0.0.1 --port 8000
+```
+
+### Run the MCP server
+
+Enable the MCP adapter in your environment, then run:
+
+```bash
+neurocore serve mcp --transport stdio
+```
+
+The checkout-safe wrapper is also available:
+
+```bash
+python scripts/neurocore_checkout.py serve mcp --transport stdio
+```
 
 ### Ingest an external event payload
 
@@ -262,22 +309,6 @@ from neurocore.adapters.mcp_server import create_mcp_server
 server = create_mcp_server()
 ```
 
-### Run the reference app
-
-Enable the HTTP adapter in your environment and run:
-
-```bash
-python scripts/neurocore_checkout.py serve http --host 127.0.0.1 --port 8000
-```
-
-### Run the MCP server
-
-Enable the MCP adapter in your environment and run:
-
-```bash
-python scripts/neurocore_checkout.py serve mcp --transport stdio
-```
-
 ## Configuration
 
 Required configuration values:
@@ -289,12 +320,27 @@ Required configuration values:
 Common optional settings:
 
 - `NEUROCORE_STORAGE_BACKEND=in_memory|sqlite|postgres`
+- `NEUROCORE_PRIMARY_STORE_PATH`
+- `NEUROCORE_SEALED_STORE_PATH`
 - `NEUROCORE_SEMANTIC_BACKEND=none|sentence-transformers`
+- `NEUROCORE_SEMANTIC_MODEL_NAME`
+- `NEUROCORE_DEFAULT_TOP_K`
+- `NEUROCORE_INGEST_PROFILE_PATH`
+- `NEUROCORE_ALLOW_HARD_DELETE=true|false`
+- `NEUROCORE_ENABLE_CLI_ADAPTER=true|false`
+- `NEUROCORE_ENABLE_HTTP_ADAPTER=true|false`
+- `NEUROCORE_ENABLE_MCP_ADAPTER=true|false`
 - `NEUROCORE_ENABLE_ADMIN_SURFACE=true|false`
 - `NEUROCORE_ENABLE_DASHBOARD=true|false`
 - `NEUROCORE_ENABLE_BACKGROUND_SUMMARIZATION=true|false`
 - `NEUROCORE_ENABLE_MULTI_MODEL_CONSENSUS=true|false`
+- `NEUROCORE_CONSENSUS_PROVIDER=none|openai_compatible`
+- `NEUROCORE_CONSENSUS_MODEL_NAMES=model-a,model-b`
+- `NEUROCORE_CONSENSUS_BASE_URL`
+- `NEUROCORE_CONSENSUS_API_KEY`
 - `NEUROCORE_PRODUCTION_BACKEND_PROVIDER=none|neon`
+- `NEUROCORE_PRODUCTION_DATABASE_URL`
+- `NEUROCORE_PRODUCTION_SEALED_DATABASE_URL`
 
 For the full generic environment template, see [.env.example](.env.example). For
 the security-oriented bootstrap profile, see
@@ -313,10 +359,11 @@ make setup
 Validation commands:
 
 ```bash
-black --check src tests
-flake8 src tests
-pytest
+make lint
+make test
+make validate
 python scripts/validate_checkout.py
+make sentrux
 ```
 
 The GitHub Actions workflow in `.github/workflows/repo-gate.yml` runs those same
@@ -328,9 +375,9 @@ checks across Python 3.11, 3.12, and 3.13.
 - [Reference Stack](docs/reference-stack.md)
 - [Hosted Stack](docs/hosted-stack.md)
 - [Security Guide](docs/security.md)
+- [Security Workflows](docs/security-workflows.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [AI-Assisted Setup](docs/ai-assisted-setup.md)
-- [OB1 Gap Report](docs/ob1-gap-report.md)
 - [Contributing Guide](CONTRIBUTING.md)
 
 ## Ecosystem Surfaces
