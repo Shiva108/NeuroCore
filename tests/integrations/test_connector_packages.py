@@ -135,6 +135,18 @@ def test_slack_connector_supports_brain_management_and_session_resume():
     assert "incident timeline" in resume_payload["briefing"].lower()
 
 
+def test_slack_connector_exposes_shared_health_and_setup_contract():
+    connector = _load_connector("integrations/slack-connector/connector.py")
+    store = InMemoryStore()
+    config = _config()
+
+    health_payload = connector.run_for_test(["health"], store=store, config=config)
+
+    assert health_payload["healthy"] is True
+    assert "describe_capabilities" in health_payload["supported_verbs"]
+    assert health_payload["reporting_status"]["status"] == "fallback-only"
+
+
 def test_discord_connector_ingests_and_runs_protocol():
     connector = _load_connector("integrations/discord-connector/connector.py")
     store = InMemoryStore()
@@ -229,6 +241,18 @@ def test_claude_desktop_connector_lists_tools_and_runs_protocol():
     assert "generate_briefing" in tools_payload["tools"]
     assert protocol_payload["protocol"]["prioritization_strategy"] == "severity+intel-tags+operator-concern"
     assert "## Actions" in protocol_payload["report"]
+
+
+def test_claude_desktop_connector_exposes_shared_contract_commands():
+    connector = _load_connector("integrations/claude-desktop-mcp/connector.py")
+    store = InMemoryStore()
+    config = _config()
+
+    payload = connector.run_for_test(["describe-capabilities"], store=store, config=config)
+
+    assert payload["healthy"] is True
+    assert "select_brain" in payload["supported_verbs"]
+    assert "setup_instructions" in payload
 
 
 def test_claude_desktop_connector_lists_protocols_and_resumes_sessions():

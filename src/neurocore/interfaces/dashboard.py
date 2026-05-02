@@ -6,6 +6,8 @@ from neurocore.core.brains import resolve_namespace_for_brain
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.interfaces.brains import list_brains
 from neurocore.interfaces.connectors import list_connector_statuses
+from neurocore.interfaces.protocols import prioritize_memory_results
+from neurocore.interfaces.reporting import build_reporting_status
 from neurocore.runtime import build_production_backend_choice
 from neurocore.storage.base import BaseStore
 
@@ -62,6 +64,22 @@ def build_dashboard_data(
                 "archived": document.archived_at is not None,
             }
         )
+    prioritized_feed = prioritize_memory_results(
+        [
+            {
+                "id": record.id,
+                "namespace": record.namespace,
+                "bucket": record.bucket,
+                "content_preview": record.content[:160],
+                "metadata": {
+                    **dict(record.metadata),
+                    "tags": list(record.tags),
+                },
+            }
+            for record in records[:24]
+        ],
+        strategy="severity+importance+validated-findings+operator-concern+recency",
+    )
 
     return {
         "stats": {
@@ -81,7 +99,9 @@ def build_dashboard_data(
         "active_brain_id": resolved_brain_id or active_namespace,
         "active_namespace": active_namespace,
         "brain_metadata": brain_meta,
-        "connectors": list_connector_statuses(),
+        "connectors": list_connector_statuses(config=config),
+        "reporting_status": build_reporting_status(config),
+        "prioritized_feed": prioritized_feed[:8],
         "production_backend": build_production_backend_choice(config).to_dict(),
         "available_buckets": list(config.allowed_buckets),
         "active_bucket_filter": bucket_filter,

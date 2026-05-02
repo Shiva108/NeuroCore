@@ -54,13 +54,19 @@ def test_run_protocol_cti_review_v1_returns_protocol_payload_with_required_secti
 def test_list_protocols_returns_supported_protocol_manifests():
     protocols = list_protocols()
 
-    assert len(protocols) >= 5
+    assert len(protocols) >= 11
     names = {protocol["name"] for protocol in protocols}
     assert "resume-brain-v1" in names
     assert "project-review-v1" in names
     assert "memory-audit-v1" in names
     assert "cti-review-v1" in names
     assert "engagement-review-v1" in names
+    assert "brain-inbox-triage-v1" in names
+    assert "operator-briefing-v1" in names
+    assert "project-handoff-v1" in names
+    assert "session-review-v1" in names
+    assert "engagement-next-actions-v1" in names
+    assert "report-prep-v1" in names
 
 
 def test_run_protocol_resume_brain_v1_returns_required_sections():

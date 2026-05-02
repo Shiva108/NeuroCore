@@ -8,6 +8,7 @@ from typing import Any, Callable
 from neurocore.core.brains import apply_brain_namespace
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.interfaces.admin import audit_memory
+from neurocore.interfaces.briefing import generate_briefing
 from neurocore.interfaces.query import query_memory
 from neurocore.interfaces.reporting import generate_consensus_report
 from neurocore.interfaces.sessions import resume_session
@@ -72,6 +73,72 @@ PROTOCOLS: dict[str, dict[str, object]] = {
         "output_mode": "markdown-report",
         "supports_fallback": True,
     },
+    "brain-inbox-triage-v1": {
+        "name": "brain-inbox-triage-v1",
+        "purpose": "Prioritize recent memory requiring operator attention.",
+        "query_preset": "brain-inbox-triage",
+        "bucket_scope": ["agents", "ops", "reports", "findings"],
+        "objective_template": "Summarize what matters now and what should be triaged first.",
+        "required_sections": ["Overview", "Findings", "Risks", "Actions"],
+        "prioritization_strategy": "severity+importance+recency+operator-concern",
+        "output_mode": "markdown-report",
+        "supports_fallback": True,
+    },
+    "operator-briefing-v1": {
+        "name": "operator-briefing-v1",
+        "purpose": "Prepare a concise operator briefing from shared memory.",
+        "query_preset": "operator-briefing",
+        "bucket_scope": ["agents", "ops", "findings", "reports"],
+        "objective_template": "Summarize the current operator state, decisions, and next actions.",
+        "required_sections": ["Overview", "Relevant Memory", "Next Actions"],
+        "prioritization_strategy": "importance+validated-findings+operator-concern",
+        "output_mode": "markdown-briefing",
+        "supports_fallback": True,
+    },
+    "project-handoff-v1": {
+        "name": "project-handoff-v1",
+        "purpose": "Create a handoff summary for another operator or model.",
+        "query_preset": "project-handoff",
+        "bucket_scope": ["agents", "ops", "reports", "findings", "recon"],
+        "objective_template": "Summarize the current project state and the next handoff actions.",
+        "required_sections": ["Overview", "Findings", "Risks", "Actions"],
+        "prioritization_strategy": "importance+checkpoint-status+recency",
+        "output_mode": "markdown-report",
+        "supports_fallback": True,
+    },
+    "session-review-v1": {
+        "name": "session-review-v1",
+        "purpose": "Review the key outcomes from a prior session.",
+        "query_preset": "session-review",
+        "bucket_scope": ["agents", "ops", "reports"],
+        "objective_template": "Summarize the most important prior session outcomes and pending actions.",
+        "required_sections": ["Overview", "Relevant Memory", "Next Actions"],
+        "prioritization_strategy": "session-checkpoints+importance+recency",
+        "output_mode": "markdown-briefing",
+        "supports_fallback": True,
+    },
+    "engagement-next-actions-v1": {
+        "name": "engagement-next-actions-v1",
+        "purpose": "Prioritize the next concrete actions for an active engagement.",
+        "query_preset": "engagement-next-actions",
+        "bucket_scope": ["findings", "ops", "agents", "reports", "recon"],
+        "objective_template": "Summarize the most important next actions for the engagement.",
+        "required_sections": ["Overview", "Findings", "Risks", "Actions"],
+        "prioritization_strategy": "validated-findings+exploitability+importance",
+        "output_mode": "markdown-report",
+        "supports_fallback": True,
+    },
+    "report-prep-v1": {
+        "name": "report-prep-v1",
+        "purpose": "Prepare the most relevant evidence and framing for final reporting.",
+        "query_preset": "report-prep",
+        "bucket_scope": ["reports", "findings", "ops", "agents"],
+        "objective_template": "Summarize the most important evidence and framing for the final report.",
+        "required_sections": ["Overview", "Findings", "Risks", "Actions"],
+        "prioritization_strategy": "severity+validated-findings+importance+recency",
+        "output_mode": "markdown-report",
+        "supports_fallback": True,
+    },
 }
 
 
@@ -125,14 +192,61 @@ def _run_resume_protocol(
     store: BaseStore,
     config: NeuroCoreConfig,
 ) -> dict[str, object]:
-    payload = resume_session(request, store=store, config=config)
+    if str(request.get("session_id") or "").strip():
+        payload = resume_session(request, store=store, config=config)
+        return {
+            "mode": "briefing",
+            "report": payload["briefing"],
+            "metadata": payload.get("metadata", {}),
+            "protocol": {
+                **manifest,
+                "ranked_result_count": len(
+                    payload.get("query_response", {}).get("results", [])
+                ),
+                "output_mode": "briefing",
+            },
+        }
+
+    resolved = apply_brain_namespace(
+        request, store=store, default_namespace=config.default_namespace
+    )
+    query_payload = query_memory(
+        {
+            "brain_id": resolved.get("brain_id"),
+            "namespace": resolved["namespace"],
+            "query_text": str(
+                request.get("query_text") or "recent checkpoints and next actions"
+            ),
+            "allowed_buckets": list(
+                request.get("allowed_buckets") or manifest["bucket_scope"]
+            ),
+            "sensitivity_ceiling": str(
+                request.get("sensitivity_ceiling") or config.default_sensitivity
+            ),
+            "top_k": int(request.get("top_k", 6)),
+            "tags_any": list(request.get("tags_any") or ["artifact:session-checkpoint"]),
+        },
+        store=store,
+        config=config,
+    )
+    briefing_payload = generate_briefing(
+        {
+            "brain_id": resolved.get("brain_id"),
+            "query_response": query_payload,
+            "sections": list(request.get("sections") or manifest["required_sections"]),
+            "max_items": int(request.get("max_items", 6)),
+            "include_operator_hints": False,
+        },
+        store=store,
+        config=config,
+    )
     return {
         "mode": "briefing",
-        "report": payload["briefing"],
-        "metadata": payload.get("metadata", {}),
+        "report": briefing_payload["briefing"],
+        "metadata": briefing_payload.get("metadata", {}),
         "protocol": {
             **manifest,
-            "ranked_result_count": len(payload.get("query_response", {}).get("results", [])),
+            "ranked_result_count": len(query_payload.get("results", [])),
             "output_mode": "briefing",
         },
     }
@@ -229,7 +343,7 @@ def _run_query_backed_protocol(
         config=config,
         semantic_ranker=semantic_ranker,
     )
-    ranked_results = _rank_protocol_results(
+    ranked_results = prioritize_memory_results(
         query_payload.get("results", []),
         strategy=str(manifest.get("prioritization_strategy") or ""),
     )
@@ -264,7 +378,7 @@ def _run_query_backed_protocol(
     }
 
 
-def _rank_protocol_results(
+def prioritize_memory_results(
     results: object, *, strategy: str
 ) -> list[dict[str, object]]:
     if not isinstance(results, list):
@@ -278,11 +392,19 @@ def _rank_protocol_results(
         tags = metadata.get("tags", [])
         tags = tags if isinstance(tags, list) else []
         preview = str(result.get("content_preview") or result.get("title") or "").lower()
+        explanation = result.get("explanation", {})
+        matched_signals = explanation.get("matched_signals", [])
+        matched_signals = matched_signals if isinstance(matched_signals, list) else []
         severity = (
             preview.count("critical") * 5
             + preview.count("high") * 3
             + preview.count("medium")
             + preview.count("important") * 2
+        )
+        severity += sum(
+            5 if str(tag).lower() == "severity:critical" else 3
+            for tag in tags
+            if str(tag).lower() in {"severity:critical", "severity:high"}
         )
         intel_tags = sum(
             3
@@ -296,6 +418,24 @@ def _rank_protocol_results(
         )
         checkpoint_weight = 3 if "checkpoint" in strategy and "checkpoint" in preview else 0
         session_weight = 3 if "session" in strategy and "session" in preview else 0
+        importance_weight = (
+            3
+            if any("importance:high" == str(tag).lower() for tag in tags)
+            else 0
+        )
+        validated_weight = (
+            4
+            if "validated" in preview
+            or any("state:confirmed-vuln" == str(tag).lower() for tag in tags)
+            else 0
+        )
+        exploitability_weight = (
+            4
+            if "exploited" in preview
+            or any("state:exploited" == str(tag).lower() for tag in tags)
+            else 0
+        )
+        recency_weight = 2 if matched_signals else 0
         cti_signal_weight = (
             4 if re.search(r"cve[-_]?\d{4,7}|cwe[-_]?\d+|t\d{4}", preview) else 0
         )
@@ -306,6 +446,10 @@ def _rank_protocol_results(
             + source_weight
             + checkpoint_weight
             + session_weight
+            + importance_weight
+            + validated_weight
+            + exploitability_weight
+            + recency_weight
             + cti_signal_weight
         )
 

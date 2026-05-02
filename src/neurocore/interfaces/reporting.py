@@ -14,6 +14,41 @@ from neurocore.runtime import build_reporter
 from neurocore.storage.base import BaseStore
 
 
+def build_reporting_status(config: NeuroCoreConfig) -> dict[str, object]:
+    provider = str(config.consensus_provider or "none")
+    base_url = str(config.consensus_base_url or "").strip()
+    model_names = list(config.consensus_model_names)
+    if not config.enable_multi_model_consensus:
+        return {
+            "provider": provider,
+            "status": "fallback-only",
+            "configured": False,
+            "bootstrapped": False,
+            "healthy": False,
+            "issues": ["Consensus reporting is disabled."],
+        }
+    issues: list[str] = []
+    configured = True
+    try:
+        build_reporter(config)
+    except Exception as exc:
+        configured = False
+        issues.append(str(exc))
+    bootstrapped = bool(base_url) if provider == "openai_compatible" else configured
+    healthy = configured and bootstrapped
+    status = "healthy" if healthy else ("configured" if configured else "degraded")
+    return {
+        "provider": provider,
+        "status": status,
+        "configured": configured,
+        "bootstrapped": bootstrapped,
+        "healthy": healthy,
+        "model_names": model_names,
+        "base_url": base_url or None,
+        "issues": issues,
+    }
+
+
 def generate_consensus_report(
     request: dict[str, object],
     *,
@@ -49,6 +84,7 @@ def generate_consensus_report(
         payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
         metadata = dict(payload.get("metadata", {}))
         metadata["context_source"] = context_source
+        metadata["reporting_status"] = build_reporting_status(config)
         if query_id:
             metadata["query_id"] = query_id
         payload["metadata"] = metadata
@@ -67,6 +103,7 @@ def generate_consensus_report(
         )
         metadata = dict(fallback.get("metadata", {}))
         metadata["context_source"] = context_source
+        metadata["reporting_status"] = build_reporting_status(config)
         if query_id:
             metadata["query_id"] = query_id
         fallback["metadata"] = metadata

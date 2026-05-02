@@ -769,6 +769,7 @@ def _render_reference_app(
 ) -> str:
     stats = data["stats"]
     production = data["production_backend"]
+    reporting_status = data.get("reporting_status", {})
     available_buckets = data.get("available_buckets", [])
     active_bucket = data.get("active_bucket_filter") or ""
     capture_feedback = _render_result_block("Capture Result", capture_result)
@@ -781,6 +782,7 @@ def _render_reference_app(
     admin_feedback = _render_result_block("Admin Result", admin_result)
     recent_documents = _render_document_list(data["recent_documents"])
     recent_records = _render_record_list(data.get("recent_records", []))
+    prioritized_feed = _render_prioritized_feed(data.get("prioritized_feed", []))
     brains = _render_brain_list(data.get("brains", []), active_brain_id)
     connectors = _render_connector_list(data.get("connectors", []))
     stats_line = (
@@ -789,6 +791,11 @@ def _render_reference_app(
     )
     production_line = (
         f"Production backend: {production['provider']} ({production['status']})"
+    )
+    reporting_line = (
+        "Reporting: "
+        f"{escape(str(reporting_status.get('status', 'fallback-only')))} "
+        f"via {escape(str(reporting_status.get('provider', 'none')))}"
     )
     capture_bucket = escape(str(active_bucket or "research"))
     brain_id = escape(active_brain_id or config.default_namespace)
@@ -809,6 +816,7 @@ def _render_reference_app(
         <h1>NeuroCore Reference App</h1>
         <p>{stats_line}</p>
         <p>{production_line}</p>
+        <p>{reporting_line}</p>
         {_render_brain_selector_section(brain_id, active_bucket)}
         {_render_brain_management_section(brain_id, allowed_bucket_values, brain_feedback)}
         {_render_capture_section(
@@ -862,6 +870,10 @@ def _render_reference_app(
         <section>
           <h2>Recent Memory</h2>
           <ul>{recent_records}</ul>
+        </section>
+        <section>
+          <h2>What Matters Now</h2>
+          <ul>{prioritized_feed}</ul>
         </section>
         <section>
           <h2>Recent Documents</h2>
@@ -1208,6 +1220,18 @@ def _render_record_list(records: list[dict[str, object]]) -> str:
     )
 
 
+def _render_prioritized_feed(items: list[dict[str, object]]) -> str:
+    if not items:
+        return "<li>No prioritized memory yet.</li>"
+    return "".join(
+        (
+            f"<li><strong>{escape(str(item.get('bucket') or 'memory'))}</strong> "
+            f"- {escape(str(item.get('content_preview') or item.get('id') or 'Untitled memory'))}</li>"
+        )
+        for item in items
+    )
+
+
 def _render_brain_list(brains: list[dict[str, object]], active_brain_id: str) -> str:
     if not brains:
         return "<li>No brains yet.</li>"
@@ -1228,9 +1252,11 @@ def _render_connector_list(connectors: list[dict[str, object]]) -> str:
     return "".join(
         (
             f"<li><strong>{escape(str(item.get('name', item.get('slug', 'unknown'))))}</strong> "
-            f"{'runnable' if item.get('runnable') else 'metadata-only'}"
+            f"{'healthy' if item.get('healthy') else ('runnable' if item.get('runnable') else 'metadata-only')}"
             f" - {escape(str(item.get('description') or ''))}"
-            f" - capabilities: {escape(', '.join(str(cap) for cap in item.get('capabilities', [])))}</li>"
+            f" - capabilities: {escape(', '.join(str(cap) for cap in item.get('capabilities', [])))}"
+            f" - verbs: {escape(', '.join(str(verb) for verb in item.get('supported_verbs', [])))}"
+            f" - setup: {escape(str(item.get('setup_instructions') or 'n/a'))}</li>"
         )
         for item in connectors
     )

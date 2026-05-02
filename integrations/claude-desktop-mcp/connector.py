@@ -17,11 +17,12 @@ if str(SRC_ROOT) not in sys.path:
 
 from neurocore.adapters.mcp_server import create_mcp_server
 from neurocore.core.config import NeuroCoreConfig, load_config
-from neurocore.interfaces.brains import list_brains
+from neurocore.interfaces.brains import create_brain, list_brains
 from neurocore.interfaces.briefing import generate_briefing
+from neurocore.interfaces.connectors import OPENBRAIN_CONNECTOR_VERBS
 from neurocore.interfaces.protocols import list_protocols, run_protocol
-from neurocore.interfaces.reporting import generate_consensus_report
-from neurocore.interfaces.sessions import resume_session
+from neurocore.interfaces.reporting import build_reporting_status, generate_consensus_report
+from neurocore.interfaces.sessions import capture_session_event, resume_session
 from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
 
@@ -30,12 +31,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python integrations/claude-desktop-mcp/connector.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("describe-tools")
+    subparsers.add_parser("health")
+    subparsers.add_parser("describe-capabilities")
+    subparsers.add_parser("setup-instructions")
     subparsers.add_parser("list-protocols")
     subparsers.add_parser("list-brains")
     config_parser = subparsers.add_parser("claude-config")
-    config_parser.add_argument("--command", default="neurocore")
+    config_parser.add_argument("--mcp-command", default="neurocore")
     config_parser.add_argument("--transport", default="stdio")
-    for name in ("briefing", "protocol", "report", "session-resume"):
+    for name in (
+        "briefing",
+        "protocol",
+        "report",
+        "session-capture",
+        "session-resume",
+        "select-brain",
+    ):
         child = subparsers.add_parser(name)
         child.add_argument("--request-json", required=True)
     return parser
@@ -57,6 +68,19 @@ def main(
     if args.command == "describe-tools":
         server = create_mcp_server(store=store, config=config)
         payload = {"tools": asyncio.run(_list_tool_names(server))}
+    elif args.command in {"health", "describe-capabilities", "setup-instructions"}:
+        payload = {
+            "connector": "claude-desktop-mcp",
+            "runnable": True,
+            "configured": True,
+            "healthy": True,
+            "supported_verbs": list(OPENBRAIN_CONNECTOR_VERBS),
+            "reporting_status": build_reporting_status(config),
+            "setup_instructions": (
+                "Run health, then claude-config, paste the MCP block into Claude Desktop, "
+                "and validate with describe-tools."
+            ),
+        }
     elif args.command == "list-protocols":
         payload = {"protocols": list_protocols()}
     elif args.command == "list-brains":
@@ -65,7 +89,7 @@ def main(
         payload = {
             "mcpServers": {
                 "neurocore": {
-                    "command": args.command,
+                    "command": args.mcp_command,
                     "args": ["serve", "mcp", "--transport", args.transport],
                 }
             }
@@ -86,8 +110,16 @@ def main(
                 config=config,
                 semantic_ranker=semantic_ranker,
             )
+        elif args.command == "session-capture":
+            payload = capture_session_event(request, store=store, config=config)
         elif args.command == "session-resume":
             payload = resume_session(request, store=store, config=config)
+        elif args.command == "select-brain":
+            payload = create_brain(
+                request,
+                store=store,
+                default_allowed_buckets=config.allowed_buckets,
+            )
         else:
             payload = run_protocol(
                 request,

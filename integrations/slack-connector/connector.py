@@ -16,10 +16,11 @@ if str(SRC_ROOT) not in sys.path:
 
 from neurocore.core.config import NeuroCoreConfig, load_config
 from neurocore.interfaces.brains import create_brain, list_brains
+from neurocore.interfaces.connectors import OPENBRAIN_CONNECTOR_VERBS
 from neurocore.interfaces.ingest import ingest_slack_event
 from neurocore.interfaces.protocols import run_protocol
 from neurocore.interfaces.query import query_memory
-from neurocore.interfaces.reporting import generate_consensus_report
+from neurocore.interfaces.reporting import build_reporting_status, generate_consensus_report
 from neurocore.interfaces.sessions import capture_session_event, resume_session
 from neurocore.runtime import build_semantic_ranker, build_store
 from neurocore.storage.base import BaseStore
@@ -29,11 +30,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python integrations/slack-connector/connector.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("health")
+    subparsers.add_parser("describe-capabilities")
+    subparsers.add_parser("setup-instructions")
     for name in (
         "ingest",
         "query",
         "report",
         "protocol",
+        "select-brain",
         "create-brain",
         "list-brains",
         "session-capture",
@@ -55,10 +59,13 @@ def main(
     config = config or load_config()
     store = store or build_store(config)
     semantic_ranker = build_semantic_ranker(config)
-    if args.command == "health":
+    if args.command in {"health", "describe-capabilities", "setup-instructions"}:
         response = {
             "connector": "slack",
             "runnable": True,
+            "configured": True,
+            "healthy": True,
+            "supported_verbs": list((*OPENBRAIN_CONNECTOR_VERBS, "ingest_event")),
             "capabilities": [
                 "ingest",
                 "query",
@@ -67,6 +74,11 @@ def main(
                 "brain-management",
                 "session-memory",
             ],
+            "reporting_status": build_reporting_status(config),
+            "setup_instructions": (
+                "Run health, create or select a brain, ingest a Slack event payload, "
+                "then query, report, or run a protocol."
+            ),
         }
     else:
         request = _parse_request(args.request_json or "{}")
@@ -87,6 +99,12 @@ def main(
                 semantic_ranker=semantic_ranker,
             )
         elif args.command == "create-brain":
+            response = create_brain(
+                request,
+                store=store,
+                default_allowed_buckets=config.allowed_buckets,
+            )
+        elif args.command == "select-brain":
             response = create_brain(
                 request,
                 store=store,

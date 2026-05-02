@@ -413,6 +413,11 @@ def _add_utility_parsers(subparsers) -> None:
         help="Run a named protocol using the NeuroCore CLI surface.",
     )
     protocol_run_parser.add_argument("--request-json", required=True)
+    query_json_parser = subparsers.add_parser(
+        "query-json",
+        help="Forward a structured query request to the NeuroCore CLI surface.",
+    )
+    query_json_parser.add_argument("--request-json", required=True)
     for name in (
         "brain-create",
         "brain-get",
@@ -516,6 +521,14 @@ def main(argv: list[str] | None = None) -> int:
             repo_root,
             env,
             ["protocol", "run"],
+            _parse_request_object(args.request_json),
+        )
+
+    if args.command == "query-json":
+        return _run_neurocore(
+            repo_root,
+            env,
+            "query",
             _parse_request_object(args.request_json),
         )
 

@@ -1,6 +1,9 @@
 from neurocore.core.config import NeuroCoreConfig
 from neurocore.interfaces.capture import capture_memory
-from neurocore.interfaces.reporting import generate_consensus_report
+from neurocore.interfaces.reporting import (
+    build_reporting_status,
+    generate_consensus_report,
+)
 from neurocore.storage.in_memory import InMemoryStore
 
 
@@ -182,3 +185,51 @@ def test_generate_consensus_report_falls_back_when_reporter_raises():
 
     assert response["mode"] == "fallback-briefing"
     assert response["metadata"]["fallback_reason"] == "reporter unavailable"
+
+
+def test_build_reporting_status_emits_explicit_readiness_fields():
+    disabled = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_multi_model_consensus=False,
+    )
+    enabled = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_multi_model_consensus=True,
+        consensus_provider="openai_compatible",
+        consensus_model_names=("gpt-1", "gpt-2"),
+        consensus_base_url="http://reporter.test",
+        consensus_api_key="token",
+    )
+    invalid_provider = NeuroCoreConfig(
+        default_namespace="project-alpha",
+        allowed_buckets=("research",),
+        default_sensitivity="standard",
+        enable_multi_model_consensus=True,
+        consensus_provider="none",
+    )
+
+    disabled_status = build_reporting_status(disabled)
+    enabled_status = build_reporting_status(enabled)
+    invalid_status = build_reporting_status(invalid_provider)
+
+    assert disabled_status["status"] == "fallback-only"
+    assert disabled_status["configured"] is False
+    assert disabled_status["bootstrapped"] is False
+    assert disabled_status["healthy"] is False
+    assert disabled_status["issues"]
+
+    assert enabled_status["status"] == "healthy"
+    assert enabled_status["configured"] is True
+    assert enabled_status["bootstrapped"] is True
+    assert enabled_status["healthy"] is True
+    assert enabled_status["issues"] == []
+
+    assert invalid_status["status"] == "degraded"
+    assert invalid_status["configured"] is False
+    assert invalid_status["bootstrapped"] is False
+    assert invalid_status["healthy"] is False
+    assert invalid_status["issues"] == ["Consensus reporting requires a supported consensus provider"]

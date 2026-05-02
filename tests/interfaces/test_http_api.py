@@ -112,6 +112,11 @@ def test_http_api_report_route_returns_fallback_when_consensus_disabled():
 
     assert response.status_code == 200
     assert response.json()["mode"] == "fallback-briefing"
+    reporting_status = response.json()["metadata"]["reporting_status"]
+    assert reporting_status["status"] == "fallback-only"
+    assert reporting_status["configured"] is False
+    assert reporting_status["bootstrapped"] is False
+    assert reporting_status["healthy"] is False
 
 
 def test_http_api_report_route_delegates_to_reporting_interface(monkeypatch):
@@ -344,9 +349,11 @@ def test_http_api_exposes_ingestion_summary_and_dashboard_surfaces():
     assert summary_response.status_code == 200
     assert dashboard_response.status_code == 200
     assert "NeuroCore Reference App" in dashboard_response.text
+    assert "What Matters Now" in dashboard_response.text
     assert dashboard_data_response.status_code == 200
     assert dashboard_data_response.json()["production_backend"]["provider"] == "neon"
     assert dashboard_data_response.json()["production_backend"]["primary_url"] is None
+    assert dashboard_data_response.json()["reporting_status"]["status"] == "fallback-only"
 
 
 def test_http_api_admin_audit_route_returns_findings_when_enabled():
@@ -423,6 +430,8 @@ def test_http_api_dashboard_renders_reference_app_sections():
     assert "Search Memory" in response.text
     assert "Briefing Pane" in response.text
     assert "Report Pane" in response.text
+    assert "What Matters Now" in response.text
+    assert "Connector Status" in response.text
     assert "Filter Recent Activity" in response.text
     assert "Admin Actions" not in response.text
 
