@@ -84,6 +84,115 @@ CORPUS_DISTILLATION_BUCKETS = {
     "article": ("ops", "payloads", "reports"),
     "book-note": ("ops", "payloads", "reports"),
 }
+CORPUS_RECORD_KIND_SPECS = {
+    "bug-bounty-report": {
+        "record_kinds": {
+            "exploit-prerequisite": "findings",
+            "accepted-proof-pattern": "findings",
+            "failure-mode": "findings",
+            "false-positive-trap": "findings",
+            "report-wording": "reports",
+            "payload-variant": "payloads",
+            "pivot-idea": "ops",
+        },
+        "source_sections": {
+            "prerequisites",
+            "proof-pattern",
+            "failure-modes",
+            "false-positive-traps",
+            "report-wording",
+            "payloads",
+            "pivot-ideas",
+        },
+    },
+    "htb-writeup": {
+        "record_kinds": {
+            "recon-pivot": "recon",
+            "foothold-chain": "findings",
+            "privesc-chain": "findings",
+            "blocker": "ops",
+            "dead-end": "ops",
+            "tool-interpretation": "payloads",
+        },
+        "source_sections": {
+            "recon",
+            "foothold",
+            "privesc",
+            "blockers",
+            "dead-ends",
+            "tool-output",
+        },
+    },
+    "article": {
+        "record_kinds": {
+            "methodology-note": "ops",
+            "checklist": "ops",
+            "detection-heuristic": "ops",
+            "attack-path-template": "payloads",
+            "defensive-assumption": "reports",
+        },
+        "source_sections": {
+            "methodology",
+            "checklists",
+            "detection",
+            "attack-paths",
+            "defensive-assumptions",
+        },
+    },
+    "book-note": {
+        "record_kinds": {
+            "methodology-note": "ops",
+            "checklist": "ops",
+            "detection-heuristic": "ops",
+            "attack-path-template": "payloads",
+            "defensive-assumption": "reports",
+        },
+        "source_sections": {
+            "methodology",
+            "checklists",
+            "detection",
+            "attack-paths",
+            "defensive-assumptions",
+        },
+    },
+}
+REQUIRED_CORPUS_TAG_FAMILIES = ("class", "tech", "auth")
+FIXED_CORPUS_TAG_VALUES = {
+    "workflow": "corpus-import",
+}
+CORPUS_TAG_ALIASES = {
+    "space": {
+        "tradecraft": "shared",
+        "engagements": "engagement",
+    },
+    "corpus": {
+        "bugbounty-report": "bug-bounty-report",
+        "bug-bounty": "bug-bounty-report",
+        "htb": "htb-writeup",
+        "book": "book-note",
+    },
+    "class": {
+        "bola": "idor",
+        "server-side-request-forgery": "ssrf",
+        "sql-injection": "sqli",
+    },
+    "tech": {
+        "graph-ql": "graphql",
+    },
+    "auth": {
+        "anon": "anonymous",
+        "unauth": "anonymous",
+        "low-priv": "user",
+    },
+    "artifact": {
+        "raw": "raw-document",
+        "distilled": "distilled-record",
+    },
+    "state": {
+        "raw": "raw-captured",
+        "distilled-record": "distilled",
+    },
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -247,6 +356,11 @@ def _add_import_corpus_parser(subparsers) -> None:
         "--metadata-json",
         default="{}",
         help="JSON object merged into raw and distilled metadata.",
+    )
+    corpus_parser.add_argument(
+        "--sensitivity",
+        choices=("standard", "restricted", "sealed"),
+        help="Override the default corpus sensitivity.",
     )
 
 
@@ -834,7 +948,7 @@ def _build_corpus_raw_capture_request(
     distillation_model: str | None,
 ) -> dict[str, object]:
     namespace = _corpus_namespace(args, env)
-    sensitivity = _corpus_sensitivity(args.space)
+    sensitivity = _corpus_sensitivity(args)
     source_type = args.source_kind.replace("-", "_")
     title = str(args.title or source["title"] or "Imported corpus source").strip()
     fingerprint = compute_content_fingerprint(str(source["content"]))
@@ -869,18 +983,12 @@ def _build_corpus_raw_capture_request(
         "source_type": source_type,
         "title": title,
         "metadata": metadata,
-        "tags": _dedupe_strings(
-            [
-                f"space:{args.space}",
-                f"corpus:{args.source_kind}",
-                "class:unknown",
-                "tech:unknown",
-                "auth:unknown",
-                "artifact:raw-document",
-                "workflow:corpus-import",
-                "state:raw-captured",
-                *list(args.tag),
-            ]
+        "tags": _normalize_corpus_tags(
+            list(args.tag),
+            space=args.space,
+            source_kind=args.source_kind,
+            artifact="raw-document",
+            state="raw-captured",
         ),
         "force_kind": "document",
     }
@@ -939,19 +1047,12 @@ def _build_corpus_distilled_capture_requests(
                 "source_type": source_type,
                 "title": title,
                 "metadata": metadata,
-                "tags": _dedupe_strings(
-                    [
-                        f"space:{args.space}",
-                        f"corpus:{args.source_kind}",
-                        "class:unknown",
-                        "tech:unknown",
-                        "auth:unknown",
-                        "artifact:distilled-record",
-                        "workflow:corpus-import",
-                        "state:distilled",
-                        *list(args.tag),
-                        *[str(tag) for tag in item_tags],
-                    ]
+                "tags": _normalize_corpus_tags(
+                    [*list(args.tag), *[str(tag) for tag in item_tags]],
+                    space=args.space,
+                    source_kind=args.source_kind,
+                    artifact="distilled-record",
+                    state="distilled",
                 ),
             }
         )
@@ -1004,6 +1105,138 @@ def _merge_metadata(raw_json: str, extra: dict[str, object]) -> dict[str, object
     return merged
 
 
+def _normalize_tag_token(value: str) -> str:
+    token = str(value).strip().lower().replace("_", "-")
+    token = "-".join(part for part in token.split())
+    while "--" in token:
+        token = token.replace("--", "-")
+    return token.strip("-")
+
+
+def _normalize_corpus_tag(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw or ":" not in raw:
+        return _normalize_tag_token(raw)
+    family, token = raw.split(":", 1)
+    normalized_family = _normalize_tag_token(family)
+    normalized_token = _normalize_tag_token(token)
+    alias = CORPUS_TAG_ALIASES.get(normalized_family, {})
+    normalized_token = alias.get(normalized_token, normalized_token)
+    if not normalized_family or not normalized_token:
+        return ""
+    return f"{normalized_family}:{normalized_token}"
+
+
+def _normalize_corpus_tags(
+    tags: list[str],
+    *,
+    space: str,
+    source_kind: str,
+    artifact: str,
+    state: str,
+) -> list[str]:
+    normalized_extras: list[str] = []
+    family_values: dict[str, str] = {}
+    for tag in tags:
+        normalized = _normalize_corpus_tag(tag)
+        if not normalized:
+            continue
+        if ":" not in normalized:
+            normalized_extras.append(normalized)
+            continue
+        family, token = normalized.split(":", 1)
+        family_values.setdefault(family, f"{family}:{token}")
+
+    family_values["space"] = f"space:{_normalize_tag_token(space)}"
+    family_values["corpus"] = (
+        f"corpus:{CORPUS_TAG_ALIASES['corpus'].get(_normalize_tag_token(source_kind), _normalize_tag_token(source_kind))}"
+    )
+    family_values["artifact"] = (
+        f"artifact:{CORPUS_TAG_ALIASES['artifact'].get(_normalize_tag_token(artifact), _normalize_tag_token(artifact))}"
+    )
+    family_values["workflow"] = f"workflow:{FIXED_CORPUS_TAG_VALUES['workflow']}"
+    family_values["state"] = (
+        f"state:{CORPUS_TAG_ALIASES['state'].get(_normalize_tag_token(state), _normalize_tag_token(state))}"
+    )
+    for family in REQUIRED_CORPUS_TAG_FAMILIES:
+        family_values.setdefault(family, f"{family}:unknown")
+
+    ordered = [
+        family_values["space"],
+        family_values["corpus"],
+        family_values["class"],
+        family_values["tech"],
+        family_values["auth"],
+        family_values["artifact"],
+        family_values["workflow"],
+        family_values["state"],
+        *normalized_extras,
+    ]
+    return _dedupe_strings(ordered)
+
+
+def _distillation_contract(source_kind: str) -> dict[str, object]:
+    return CORPUS_RECORD_KIND_SPECS[source_kind]
+
+
+def _distillation_schema_description(source_kind: str) -> str:
+    contract = _distillation_contract(source_kind)
+    record_kinds = contract["record_kinds"]
+    lines = ["Allowed records:"]
+    for record_kind, bucket in record_kinds.items():
+        lines.append(f"- {record_kind} -> {bucket}")
+    sections = ", ".join(sorted(contract["source_sections"]))
+    return "\n".join(
+        [
+            *lines,
+            f"Allowed source_section values: {sections}",
+        ]
+    )
+
+
+def _validate_distillation_record(
+    record: dict[str, object], source_kind: str
+) -> dict[str, object]:
+    contract = _distillation_contract(source_kind)
+    record_kinds = contract["record_kinds"]
+    title = str(record.get("title") or "").strip()
+    bucket = str(record.get("bucket") or "").strip()
+    content = str(record.get("content") or "").strip()
+    tags = record.get("tags", [])
+    metadata = record.get("metadata", {})
+    if not title or not bucket or not content:
+        raise ValueError("distillation record is missing title, bucket, or content")
+    if not isinstance(tags, list):
+        raise ValueError("distillation record tags must be a list")
+    if not isinstance(metadata, dict):
+        raise ValueError("distillation record metadata must be an object")
+    record_kind = str(metadata.get("record_kind") or "").strip()
+    source_section = str(metadata.get("source_section") or "").strip()
+    if not record_kind or not source_section:
+        raise ValueError(
+            "distillation record metadata must include record_kind and source_section"
+        )
+    if record_kind not in record_kinds:
+        raise ValueError(f"unsupported record_kind for {source_kind}: {record_kind}")
+    if source_section not in contract["source_sections"]:
+        raise ValueError(
+            f"unsupported source_section for {source_kind}: {source_section}"
+        )
+    expected_bucket = str(record_kinds[record_kind]).strip()
+    if bucket != expected_bucket:
+        raise ValueError(
+            f"distillation record bucket mismatch for {record_kind}: expected {expected_bucket}, got {bucket}"
+        )
+    return {
+        "bucket": bucket,
+        "title": title,
+        "content": content,
+        "tags": [str(tag) for tag in tags],
+        "metadata": metadata,
+        "source_type": str(record.get("source_type") or "").strip() or None,
+    }
+
+
 def _safe_load_config(env: dict[str, str]):
     try:
         return load_config(env)
@@ -1049,6 +1282,7 @@ def _distill_corpus_via_provider(
     title: str,
     knowledge_space: str,
 ) -> list[dict[str, object]]:
+    schema_description = _distillation_schema_description(source_kind)
     request = urllib_request.Request(
         url=f"{str(config.consensus_base_url).rstrip('/')}/chat/completions",
         method="POST",
@@ -1065,9 +1299,11 @@ def _distill_corpus_via_provider(
                         "role": "system",
                         "content": (
                             "Return only JSON shaped as "
-                            "{\"records\":[{\"bucket\":\"...\",\"title\":\"...\",\"content\":\"...\","
+                            "{\"records\":[{\"title\":\"...\",\"bucket\":\"...\",\"content\":\"...\","
                             "\"tags\":[\"class:...\",\"tech:...\",\"auth:...\"],"
-                            "\"metadata\":{},\"source_type\":\"...\"}]}"
+                            "\"metadata\":{\"record_kind\":\"...\",\"source_section\":\"...\"},"
+                            "\"source_type\":\"...\"}]}\n"
+                            f"{schema_description}"
                         ),
                     },
                     {
@@ -1091,10 +1327,12 @@ def _distill_corpus_via_provider(
         raise ValueError("distillation provider returned no choices")
     message = choices[0].get("message", {})
     raw = str(message.get("content") or "").strip()
-    return _parse_distillation_records(raw)
+    return _parse_distillation_records(raw, source_kind=source_kind)
 
 
-def _parse_distillation_records(raw: str) -> list[dict[str, object]]:
+def _parse_distillation_records(
+    raw: str, *, source_kind: str
+) -> list[dict[str, object]]:
     payload = json.loads(raw)
     if isinstance(payload, dict):
         records = payload.get("records", [])
@@ -1104,7 +1342,12 @@ def _parse_distillation_records(raw: str) -> list[dict[str, object]]:
         raise ValueError("distillation payload must be a list or object")
     if not isinstance(records, list):
         raise ValueError("distillation records must be a list")
-    return [record for record in records if isinstance(record, dict)]
+    validated: list[dict[str, object]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("distillation records must be objects")
+        validated.append(_validate_distillation_record(record, source_kind))
+    return validated
 
 
 def _distillation_model_name(config) -> str | None:
@@ -1204,8 +1447,13 @@ def _corpus_namespace(args: argparse.Namespace, env: dict[str, str]) -> str:
     return env.get("NEUROCORE_DEFAULT_NAMESPACE", "security-lab")
 
 
-def _corpus_sensitivity(space: str) -> str:
-    return "standard" if space == "shared" else "restricted"
+def _corpus_sensitivity(args: argparse.Namespace) -> str:
+    sensitivity = str(args.sensitivity or "").strip().lower()
+    if not sensitivity:
+        return "standard" if args.space == "shared" else "restricted"
+    if args.space == "shared" and sensitivity == "sealed":
+        raise SystemExit("sealed corpus imports must use --space engagement")
+    return sensitivity
 
 
 def _corpus_origin(space: str) -> str:

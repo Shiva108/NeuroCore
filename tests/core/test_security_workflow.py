@@ -511,6 +511,78 @@ def test_main_import_corpus_captures_shared_raw_document_with_defaults(
     assert payload["distilled_count"] == 0
 
 
+def test_normalize_corpus_tags_canonicalizes_and_backfills_required_families():
+    tags = SECURITY_WORKFLOW._normalize_corpus_tags(
+        [
+            "Class:BOLA",
+            "tech:Graph_QL",
+            "auth:anon",
+            "artifact:raw",
+            "workflow:custom",
+            "state:raw",
+            "Needs Review",
+        ],
+        space="shared",
+        source_kind="bug-bounty-report",
+        artifact="raw-document",
+        state="raw-captured",
+    )
+
+    assert "space:shared" in tags
+    assert "corpus:bug-bounty-report" in tags
+    assert "class:idor" in tags
+    assert "tech:graphql" in tags
+    assert "auth:anonymous" in tags
+    assert "artifact:raw-document" in tags
+    assert "workflow:corpus-import" in tags
+    assert "state:raw-captured" in tags
+    assert "needs-review" in tags
+
+
+def test_parse_distillation_records_validates_source_kind_contract():
+    payload = SECURITY_WORKFLOW._parse_distillation_records(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "title": "Cross-tenant proof pattern",
+                        "bucket": "findings",
+                        "content": "Triager required invoice rendering across tenants.",
+                        "tags": ["class:idor", "tech:graphql", "auth:user"],
+                        "metadata": {
+                            "record_kind": "accepted-proof-pattern",
+                            "source_section": "proof-pattern",
+                        },
+                    }
+                ]
+            }
+        ),
+        source_kind="bug-bounty-report",
+    )
+
+    assert payload[0]["metadata"]["record_kind"] == "accepted-proof-pattern"
+
+
+def test_parse_distillation_records_rejects_missing_contract_fields():
+    with pytest.raises(ValueError, match="record_kind and source_section"):
+        SECURITY_WORKFLOW._parse_distillation_records(
+            json.dumps(
+                {
+                    "records": [
+                        {
+                            "title": "Broken record",
+                            "bucket": "findings",
+                            "content": "Missing metadata contract fields.",
+                            "tags": ["class:idor", "tech:graphql", "auth:user"],
+                            "metadata": {},
+                        }
+                    ]
+                }
+            ),
+            source_kind="bug-bounty-report",
+        )
+
+
 def test_main_import_corpus_captures_distilled_records_when_provider_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -536,7 +608,11 @@ def test_main_import_corpus_captures_distilled_records_when_provider_available(
                     "title": "Accepted proof pattern",
                     "content": "Triager required cross-tenant invoice rendering proof.",
                     "tags": ["class:idor", "tech:graphql", "auth:user"],
-                    "metadata": {"accepted": True},
+                    "metadata": {
+                        "accepted": True,
+                        "record_kind": "accepted-proof-pattern",
+                        "source_section": "proof-pattern",
+                    },
                     "source_type": "finding_note",
                 },
                 {
@@ -544,7 +620,11 @@ def test_main_import_corpus_captures_distilled_records_when_provider_available(
                     "title": "Reusable payload",
                     "content": "GraphQL alias batching request.",
                     "tags": ["class:idor", "tech:graphql", "auth:user"],
-                    "metadata": {"kind": "payload"},
+                    "metadata": {
+                        "kind": "payload",
+                        "record_kind": "payload-variant",
+                        "source_section": "payloads",
+                    },
                     "source_type": "payload_note",
                 },
             ]
@@ -595,6 +675,30 @@ def test_main_import_corpus_captures_distilled_records_when_provider_available(
     assert "artifact:distilled-record" in finding_request["tags"]
     payload = json.loads(stdout.getvalue())
     assert payload["distilled_count"] == 2
+
+
+def test_main_import_corpus_rejects_shared_sealed_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW, "_maybe_reexec_into_repo_runtime", lambda argv, repo_root: None
+    )
+    source = tmp_path / "sample-report.md"
+    source.write_text("# Sample Report\n\nEvidence body.", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="sealed corpus imports must use --space engagement"):
+        SECURITY_WORKFLOW.main(
+            [
+                "import-corpus",
+                "--space",
+                "shared",
+                "--source-kind",
+                "bug-bounty-report",
+                "--sensitivity",
+                "sealed",
+                str(source),
+            ]
+        )
 
 
 def test_main_import_corpus_fetches_url_and_marks_provider_fallback(
@@ -650,6 +754,119 @@ def test_main_import_corpus_fetches_url_and_marks_provider_fallback(
     assert request["metadata"]["distillation_status"] == "skipped-no-provider"
     payload = json.loads(stdout.getvalue())
     assert payload["source"]["kind"] == "url"
+
+
+def test_main_import_corpus_falls_back_to_raw_only_on_invalid_distillation_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_call_neurocore(repo_root, env, command, request):
+        calls.append((command, request))
+        return {
+            "id": request["metadata"]["raw_document_id"],
+            "kind": "document",
+            "namespace": request["namespace"],
+            "bucket": request["bucket"],
+        }
+
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_call_neurocore", fake_call_neurocore)
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW,
+        "_build_corpus_distiller",
+        lambda config: (lambda **kwargs: SECURITY_WORKFLOW._parse_distillation_records(
+            json.dumps(
+                {
+                    "records": [
+                        {
+                            "title": "Malformed record",
+                            "bucket": "findings",
+                            "content": "Missing contract metadata",
+                            "tags": ["class:idor", "tech:graphql", "auth:user"],
+                            "metadata": {},
+                        }
+                    ]
+                }
+            ),
+            source_kind="bug-bounty-report",
+        )),
+    )
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW,
+        "_safe_load_config",
+        lambda env: SimpleNamespace(
+            enable_multi_model_consensus=True,
+            consensus_provider="openai_compatible",
+            consensus_base_url="https://example.invalid/v1",
+            consensus_api_key="test-key",
+            consensus_model_names=("model-a",),
+        ),
+    )
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW, "_maybe_reexec_into_repo_runtime", lambda argv, repo_root: None
+    )
+    source = tmp_path / "invalid-provider.md"
+    source.write_text("# Sample\n\nProvider emits malformed JSON shape.", encoding="utf-8")
+    stdout = io.StringIO()
+    monkeypatch.setattr(SECURITY_WORKFLOW.sys, "stdout", stdout)
+
+    exit_code = SECURITY_WORKFLOW.main(
+        [
+            "import-corpus",
+            "--space",
+            "shared",
+            "--source-kind",
+            "bug-bounty-report",
+            str(source),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert calls[0][1]["metadata"]["distillation_status"] == "skipped-provider-error"
+    payload = json.loads(stdout.getvalue())
+    assert payload["distilled_count"] == 0
+
+
+def test_main_import_corpus_threads_explicit_engagement_sealed_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_call_neurocore(repo_root, env, command, request):
+        calls.append((command, request))
+        return {
+            "id": request["metadata"]["raw_document_id"],
+            "kind": "document",
+            "namespace": request["namespace"],
+            "bucket": request["bucket"],
+        }
+
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_call_neurocore", fake_call_neurocore)
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_safe_load_config", lambda env: None)
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW, "_maybe_reexec_into_repo_runtime", lambda argv, repo_root: None
+    )
+    source = tmp_path / "evidence.md"
+    source.write_text("# Evidence\n\nSensitive proof.", encoding="utf-8")
+    stdout = io.StringIO()
+    monkeypatch.setattr(SECURITY_WORKFLOW.sys, "stdout", stdout)
+
+    exit_code = SECURITY_WORKFLOW.main(
+        [
+            "import-corpus",
+            "--space",
+            "engagement",
+            "--source-kind",
+            "article",
+            "--sensitivity",
+            "sealed",
+            str(source),
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls[0][1]["sensitivity"] == "sealed"
 
 
 def test_print_readiness_summary_reports_missing_report_prereqs(tmp_path: Path):

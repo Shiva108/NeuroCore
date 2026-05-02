@@ -274,6 +274,8 @@ def _serialize_candidate(
         else None
     )
     metadata = dict(item.metadata)
+    if getattr(item, "title", None):
+        metadata.setdefault("title", str(item.title))
     metadata["source_type"] = _candidate_source_type(candidate)
     metadata["tags"] = list(_candidate_tags(candidate))
     return {
@@ -292,6 +294,7 @@ def _serialize_candidate(
                 "sensitivity_ceiling": context.sensitivity_ceiling,
             },
         },
+        "title": str(getattr(item, "title", "") or ""),
         "content_preview": _candidate_text(candidate)[:160],
         "metadata": metadata,
     }

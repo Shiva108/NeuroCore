@@ -92,6 +92,14 @@ def test_bootstrap_creates_local_setup_files_and_runs_verification(tmp_path: Pat
     assert [
         str(BOOTSTRAP._venv_python_path(tmp_path / ".venv")),
         "-m",
+        "pip",
+        "install",
+        "-e",
+        ".[dev,semantic]",
+    ] in commands
+    assert [
+        str(BOOTSTRAP._venv_python_path(tmp_path / ".venv")),
+        "-m",
         "pytest",
     ] in commands
     assert [
