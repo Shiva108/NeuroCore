@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -450,6 +451,205 @@ def test_main_forwards_capture_hackingagent_query_and_report(
     assert query_request["namespace"] == "pt-acme"
     assert report_command == ["report", "consensus"]
     assert report_request["query_request"]["namespace"] == "pt-acme"
+
+
+def test_main_import_corpus_captures_shared_raw_document_with_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_call_neurocore(repo_root, env, command, request):
+        calls.append((command, request))
+        return {
+            "id": request["metadata"]["raw_document_id"],
+            "kind": "document",
+            "namespace": request["namespace"],
+            "bucket": request["bucket"],
+        }
+
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_call_neurocore", fake_call_neurocore)
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_safe_load_config", lambda env: None)
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW, "_maybe_reexec_into_repo_runtime", lambda argv, repo_root: None
+    )
+
+    source = tmp_path / "sample-report.md"
+    source.write_text("# Sample Report\n\nEvidence body.", encoding="utf-8")
+    stdout = io.StringIO()
+    monkeypatch.setattr(SECURITY_WORKFLOW.sys, "stdout", stdout)
+
+    exit_code = SECURITY_WORKFLOW.main(
+        [
+            "import-corpus",
+            "--space",
+            "shared",
+            "--source-kind",
+            "bug-bounty-report",
+            str(source),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    command, request = calls[0]
+    assert command == "capture"
+    assert request["namespace"] == "shared-tradecraft"
+    assert request["bucket"] == "reports"
+    assert request["sensitivity"] == "standard"
+    assert request["source_type"] == "bug_bounty_report"
+    assert request["metadata"]["knowledge_space"] == "shared"
+    assert request["metadata"]["source_kind"] == "bug-bounty-report"
+    assert request["metadata"]["source_origin"] == "external-public"
+    assert request["metadata"]["distillation_status"] == "skipped-no-provider"
+    assert request["metadata"]["source_path"] == str(source.resolve())
+    assert "space:shared" in request["tags"]
+    assert "corpus:bug-bounty-report" in request["tags"]
+    assert "artifact:raw-document" in request["tags"]
+    assert "workflow:corpus-import" in request["tags"]
+    assert "state:raw-captured" in request["tags"]
+    payload = json.loads(stdout.getvalue())
+    assert payload["distilled_count"] == 0
+
+
+def test_main_import_corpus_captures_distilled_records_when_provider_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_call_neurocore(repo_root, env, command, request):
+        calls.append((command, request))
+        return {
+            "id": request["metadata"].get("raw_document_id", "rec-id"),
+            "kind": "document" if request["bucket"] == "reports" else "record",
+            "namespace": request["namespace"],
+            "bucket": request["bucket"],
+        }
+
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_call_neurocore", fake_call_neurocore)
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW,
+        "_build_corpus_distiller",
+        lambda config: (
+            lambda **kwargs: [
+                {
+                    "bucket": "findings",
+                    "title": "Accepted proof pattern",
+                    "content": "Triager required cross-tenant invoice rendering proof.",
+                    "tags": ["class:idor", "tech:graphql", "auth:user"],
+                    "metadata": {"accepted": True},
+                    "source_type": "finding_note",
+                },
+                {
+                    "bucket": "payloads",
+                    "title": "Reusable payload",
+                    "content": "GraphQL alias batching request.",
+                    "tags": ["class:idor", "tech:graphql", "auth:user"],
+                    "metadata": {"kind": "payload"},
+                    "source_type": "payload_note",
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW,
+        "_safe_load_config",
+        lambda env: SimpleNamespace(
+            enable_multi_model_consensus=True,
+            consensus_provider="openai_compatible",
+            consensus_base_url="https://example.invalid/v1",
+            consensus_api_key="test-key",
+            consensus_model_names=("model-a", "model-b"),
+        ),
+    )
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW, "_maybe_reexec_into_repo_runtime", lambda argv, repo_root: None
+    )
+
+    source = tmp_path / "bug-bounty.md"
+    source.write_text("# Bug bounty\n\nCross-tenant proof details.", encoding="utf-8")
+    stdout = io.StringIO()
+    monkeypatch.setattr(SECURITY_WORKFLOW.sys, "stdout", stdout)
+
+    exit_code = SECURITY_WORKFLOW.main(
+        [
+            "import-corpus",
+            "--space",
+            "shared",
+            "--source-kind",
+            "bug-bounty-report",
+            str(source),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 3
+    raw_request = calls[0][1]
+    finding_request = calls[1][1]
+    payload_request = calls[2][1]
+    assert raw_request["metadata"]["distillation_status"] == "completed"
+    assert finding_request["bucket"] == "findings"
+    assert payload_request["bucket"] == "payloads"
+    assert finding_request["metadata"]["raw_document_id"] == raw_request["metadata"]["raw_document_id"]
+    assert payload_request["metadata"]["raw_document_id"] == raw_request["metadata"]["raw_document_id"]
+    assert "space:shared" in finding_request["tags"]
+    assert "artifact:distilled-record" in finding_request["tags"]
+    payload = json.loads(stdout.getvalue())
+    assert payload["distilled_count"] == 2
+
+
+def test_main_import_corpus_fetches_url_and_marks_provider_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    class DummyResponse:
+        status = 200
+        headers = {"Content-Type": "text/markdown; charset=utf-8"}
+
+        def read(self):
+            return b"# Article\n\nDetection heuristics."
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_call_neurocore(repo_root, env, command, request):
+        calls.append((command, request))
+        return {"id": request["metadata"]["raw_document_id"], "kind": "document"}
+
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_call_neurocore", fake_call_neurocore)
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW.urllib_request, "urlopen", lambda request, timeout=0.0: DummyResponse()
+    )
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_safe_load_config", lambda env: None)
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW, "_maybe_reexec_into_repo_runtime", lambda argv, repo_root: None
+    )
+    stdout = io.StringIO()
+    monkeypatch.setattr(SECURITY_WORKFLOW.sys, "stdout", stdout)
+
+    exit_code = SECURITY_WORKFLOW.main(
+        [
+            "import-corpus",
+            "--space",
+            "shared",
+            "--source-kind",
+            "article",
+            "--url",
+            "https://example.invalid/articles/heuristics.md",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    request = calls[0][1]
+    assert request["content_format"] == "markdown"
+    assert request["metadata"]["source_url"] == "https://example.invalid/articles/heuristics.md"
+    assert request["metadata"]["distillation_status"] == "skipped-no-provider"
+    payload = json.loads(stdout.getvalue())
+    assert payload["source"]["kind"] == "url"
 
 
 def test_print_readiness_summary_reports_missing_report_prereqs(tmp_path: Path):

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TextIO
 from urllib import error as urllib_error
 from urllib import request as urllib_request
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -21,6 +21,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from neurocore.core.config import ConfigError, load_config
 from neurocore.core.semantic import sentence_transformers_status
+from neurocore.ingest.normalize import compute_content_fingerprint, generate_stable_id
 from neurocore.runtime import build_reporter
 
 SECURITY_BUCKETS = (
@@ -70,6 +71,19 @@ PRESETS = {
 }
 PRESET_NAMES = tuple(PRESETS)
 LOCAL_CONSENSUS_BASE_URL = "http://127.0.0.1:8787/v1"
+SHARED_TRADECRAFT_NAMESPACE = "shared-tradecraft"
+CORPUS_SOURCE_KINDS = (
+    "bug-bounty-report",
+    "htb-writeup",
+    "article",
+    "book-note",
+)
+CORPUS_DISTILLATION_BUCKETS = {
+    "bug-bounty-report": ("findings", "payloads", "ops", "reports"),
+    "htb-writeup": ("recon", "payloads", "findings", "ops"),
+    "article": ("ops", "payloads", "reports"),
+    "book-note": ("ops", "payloads", "reports"),
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_capture_file_parser(subparsers)
     _add_capture_paper_parser(subparsers)
     _add_capture_hackingagent_parser(subparsers)
+    _add_import_corpus_parser(subparsers)
     _add_query_parser(subparsers)
     _add_briefing_parser(subparsers)
     _add_report_parser(subparsers)
@@ -190,6 +205,48 @@ def _add_capture_hackingagent_parser(subparsers) -> None:
         "--project",
         default="hackingagent",
         help="Source project name. Defaults to hackingagent.",
+    )
+
+
+def _add_import_corpus_parser(subparsers) -> None:
+    corpus_parser = subparsers.add_parser(
+        "import-corpus",
+        help="Store a reusable security corpus source as one raw document plus optional distilled records.",
+    )
+    corpus_parser.add_argument("path", nargs="?", help="Optional local source path.")
+    corpus_parser.add_argument(
+        "--path",
+        dest="path_option",
+        help="Optional local source path.",
+    )
+    corpus_parser.add_argument("--url", help="Optional HTTP(S) source URL.")
+    corpus_parser.add_argument(
+        "--source-kind",
+        choices=CORPUS_SOURCE_KINDS,
+        required=True,
+        help="Corpus source type.",
+    )
+    corpus_parser.add_argument(
+        "--space",
+        choices=("shared", "engagement"),
+        required=True,
+        help="Whether the import targets shared tradecraft or engagement memory.",
+    )
+    corpus_parser.add_argument(
+        "--namespace",
+        help="Override the destination namespace. Shared imports default to shared-tradecraft.",
+    )
+    corpus_parser.add_argument("--title", help="Optional canonical title override.")
+    corpus_parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="Repeat to attach additional tags.",
+    )
+    corpus_parser.add_argument(
+        "--metadata-json",
+        default="{}",
+        help="JSON object merged into raw and distilled metadata.",
     )
 
 
@@ -532,6 +589,10 @@ def main(argv: list[str] | None = None) -> int:
             _parse_request_object(args.request_json),
         )
 
+    if args.command == "import-corpus":
+        print(json.dumps(_import_corpus(repo_root, env, args), indent=2, sort_keys=True))
+        return 0
+
     forwarded_admin_commands = {
         "brain-create": ["brain", "create"],
         "brain-get": ["brain", "get"],
@@ -683,6 +744,220 @@ def _build_capture_request(
     return request
 
 
+def _import_corpus(
+    repo_root: Path,
+    env: dict[str, str],
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    source = _load_corpus_source(args)
+    extra_metadata = _merge_metadata(args.metadata_json, {})
+    config = _safe_load_config(env)
+    distiller = _build_corpus_distiller(config)
+    distillation_status = "skipped-no-provider"
+    distillation_model = None
+    distilled_items: list[dict[str, object]] = []
+    if distiller is not None:
+        try:
+            distilled_items = distiller(
+                content=source["content"],
+                source_kind=args.source_kind,
+                title=args.title or source["title"],
+                knowledge_space=args.space,
+            )
+            distillation_status = "completed"
+            distillation_model = _distillation_model_name(config)
+        except Exception:
+            distilled_items = []
+            distillation_status = "skipped-provider-error"
+            distillation_model = _distillation_model_name(config)
+
+    raw_request = _build_corpus_raw_capture_request(
+        env=env,
+        args=args,
+        source=source,
+        extra_metadata=extra_metadata,
+        distillation_status=distillation_status,
+        distillation_model=distillation_model,
+    )
+    raw_capture = _call_neurocore(repo_root, env, "capture", raw_request)
+    raw_document_id = str(
+        raw_capture.get("id") or raw_request["metadata"]["raw_document_id"]
+    )
+
+    distilled_captures: list[dict[str, object]] = []
+    for request in _build_corpus_distilled_capture_requests(
+        args=args,
+        raw_request=raw_request,
+        raw_document_id=raw_document_id,
+        distilled_items=distilled_items,
+        extra_metadata=extra_metadata,
+        distillation_model=distillation_model,
+    ):
+        capture = _call_neurocore(repo_root, env, "capture", request)
+        distilled_captures.append(
+            {
+                "id": capture.get("id"),
+                "bucket": request["bucket"],
+                "title": request.get("title"),
+                "source_type": request["source_type"],
+            }
+        )
+
+    return {
+        "distillation_model": distillation_model,
+        "distillation_status": distillation_status,
+        "distilled_captures": distilled_captures,
+        "distilled_count": len(distilled_captures),
+        "knowledge_space": args.space,
+        "namespace": raw_request["namespace"],
+        "raw_capture": {
+            "bucket": raw_request["bucket"],
+            "id": raw_document_id,
+            "source_type": raw_request["source_type"],
+        },
+        "source": {
+            "kind": source["kind"],
+            "path": source.get("path"),
+            "title": raw_request["metadata"]["canonical_title"],
+            "url": source.get("url"),
+        },
+    }
+
+
+def _build_corpus_raw_capture_request(
+    *,
+    env: dict[str, str],
+    args: argparse.Namespace,
+    source: dict[str, object],
+    extra_metadata: dict[str, object],
+    distillation_status: str,
+    distillation_model: str | None,
+) -> dict[str, object]:
+    namespace = _corpus_namespace(args, env)
+    sensitivity = _corpus_sensitivity(args.space)
+    source_type = args.source_kind.replace("-", "_")
+    title = str(args.title or source["title"] or "Imported corpus source").strip()
+    fingerprint = compute_content_fingerprint(str(source["content"]))
+    raw_document_id = generate_stable_id(
+        "doc",
+        namespace,
+        "reports",
+        fingerprint,
+        source_type,
+        sensitivity,
+    )
+    metadata = {
+        "canonical_title": title,
+        "distillation_model": distillation_model,
+        "distillation_status": distillation_status,
+        "knowledge_space": args.space,
+        "raw_document_id": raw_document_id,
+        "source_kind": args.source_kind,
+        "source_origin": _corpus_origin(args.space),
+        **extra_metadata,
+    }
+    if source.get("path"):
+        metadata["source_path"] = str(source["path"])
+    if source.get("url"):
+        metadata["source_url"] = str(source["url"])
+    return {
+        "namespace": namespace,
+        "bucket": "reports",
+        "sensitivity": sensitivity,
+        "content": str(source["content"]),
+        "content_format": str(source["content_format"]),
+        "source_type": source_type,
+        "title": title,
+        "metadata": metadata,
+        "tags": _dedupe_strings(
+            [
+                f"space:{args.space}",
+                f"corpus:{args.source_kind}",
+                "class:unknown",
+                "tech:unknown",
+                "auth:unknown",
+                "artifact:raw-document",
+                "workflow:corpus-import",
+                "state:raw-captured",
+                *list(args.tag),
+            ]
+        ),
+        "force_kind": "document",
+    }
+
+
+def _build_corpus_distilled_capture_requests(
+    *,
+    args: argparse.Namespace,
+    raw_request: dict[str, object],
+    raw_document_id: str,
+    distilled_items: list[dict[str, object]],
+    extra_metadata: dict[str, object],
+    distillation_model: str | None,
+) -> list[dict[str, object]]:
+    allowed_buckets = set(CORPUS_DISTILLATION_BUCKETS[args.source_kind])
+    requests: list[dict[str, object]] = []
+    for item in distilled_items:
+        bucket = str(item.get("bucket") or "").strip()
+        title = str(item.get("title") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if bucket not in allowed_buckets or not title or not content:
+            continue
+        source_type = str(
+            item.get("source_type")
+            or f"{bucket[:-1] if bucket.endswith('s') else bucket}_note"
+        )
+        item_metadata = item.get("metadata", {})
+        if not isinstance(item_metadata, dict):
+            item_metadata = {}
+        item_tags = item.get("tags", [])
+        if not isinstance(item_tags, list):
+            item_tags = []
+        metadata = {
+            "canonical_title": raw_request["metadata"]["canonical_title"],
+            "distillation_model": distillation_model,
+            "distillation_status": "completed",
+            "knowledge_space": args.space,
+            "raw_document_id": raw_document_id,
+            "related_ids": [raw_document_id],
+            "source_kind": args.source_kind,
+            "source_origin": _corpus_origin(args.space),
+            **extra_metadata,
+            **item_metadata,
+        }
+        if raw_request["metadata"].get("source_path"):
+            metadata["source_path"] = raw_request["metadata"]["source_path"]
+        if raw_request["metadata"].get("source_url"):
+            metadata["source_url"] = raw_request["metadata"]["source_url"]
+        requests.append(
+            {
+                "namespace": raw_request["namespace"],
+                "bucket": bucket,
+                "sensitivity": raw_request["sensitivity"],
+                "content": content,
+                "content_format": "markdown",
+                "source_type": source_type,
+                "title": title,
+                "metadata": metadata,
+                "tags": _dedupe_strings(
+                    [
+                        f"space:{args.space}",
+                        f"corpus:{args.source_kind}",
+                        "class:unknown",
+                        "tech:unknown",
+                        "auth:unknown",
+                        "artifact:distilled-record",
+                        "workflow:corpus-import",
+                        "state:distilled",
+                        *list(args.tag),
+                        *[str(tag) for tag in item_tags],
+                    ]
+                ),
+            }
+        )
+    return requests
+
+
 def _build_query_request(
     args: argparse.Namespace, env: dict[str, str]
 ) -> dict[str, object]:
@@ -729,6 +1004,115 @@ def _merge_metadata(raw_json: str, extra: dict[str, object]) -> dict[str, object
     return merged
 
 
+def _safe_load_config(env: dict[str, str]):
+    try:
+        return load_config(env)
+    except ConfigError:
+        return None
+
+
+def _build_corpus_distiller(config) -> object | None:
+    if config is None:
+        return None
+    if not config.enable_multi_model_consensus:
+        return None
+    if config.consensus_provider != "openai_compatible":
+        return None
+    if not config.consensus_base_url or not config.consensus_api_key:
+        return None
+    if not config.consensus_model_names:
+        return None
+
+    def _distill(
+        *,
+        content: str,
+        source_kind: str,
+        title: str,
+        knowledge_space: str,
+    ) -> list[dict[str, object]]:
+        return _distill_corpus_via_provider(
+            config=config,
+            content=content,
+            source_kind=source_kind,
+            title=title,
+            knowledge_space=knowledge_space,
+        )
+
+    return _distill
+
+
+def _distill_corpus_via_provider(
+    *,
+    config,
+    content: str,
+    source_kind: str,
+    title: str,
+    knowledge_space: str,
+) -> list[dict[str, object]]:
+    request = urllib_request.Request(
+        url=f"{str(config.consensus_base_url).rstrip('/')}/chat/completions",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.consensus_api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(
+            {
+                "model": _distillation_model_name(config),
+                "temperature": 0.0,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return only JSON shaped as "
+                            "{\"records\":[{\"bucket\":\"...\",\"title\":\"...\",\"content\":\"...\","
+                            "\"tags\":[\"class:...\",\"tech:...\",\"auth:...\"],"
+                            "\"metadata\":{},\"source_type\":\"...\"}]}"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Source kind: {source_kind}\n"
+                            f"Knowledge space: {knowledge_space}\n"
+                            f"Canonical title: {title}\n"
+                            "Create reusable security memory records from the source.\n\n"
+                            f"{content}"
+                        ),
+                    },
+                ],
+            }
+        ).encode("utf-8"),
+    )
+    with urllib_request.urlopen(request, timeout=20.0) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    choices = payload.get("choices", [])
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("distillation provider returned no choices")
+    message = choices[0].get("message", {})
+    raw = str(message.get("content") or "").strip()
+    return _parse_distillation_records(raw)
+
+
+def _parse_distillation_records(raw: str) -> list[dict[str, object]]:
+    payload = json.loads(raw)
+    if isinstance(payload, dict):
+        records = payload.get("records", [])
+    elif isinstance(payload, list):
+        records = payload
+    else:
+        raise ValueError("distillation payload must be a list or object")
+    if not isinstance(records, list):
+        raise ValueError("distillation records must be a list")
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _distillation_model_name(config) -> str | None:
+    if config is None or not getattr(config, "consensus_model_names", ()):
+        return None
+    return str(config.consensus_model_names[0])
+
+
 def _optional_text(inline: str | None, file_path: str | None) -> str | None:
     parts: list[str] = []
     if inline:
@@ -755,6 +1139,77 @@ def _read_text_file(path: Path, *, description: str) -> str:
         ) from exc
     except OSError as exc:
         raise SystemExit(f"Could not read {description}: {path} ({exc})") from exc
+
+
+def _load_corpus_source(args: argparse.Namespace) -> dict[str, object]:
+    path_value = str(args.path_option or args.path or "").strip()
+    url_value = str(args.url or "").strip()
+    if bool(path_value) == bool(url_value):
+        raise SystemExit("import-corpus requires exactly one of --path/<path> or --url")
+    if path_value:
+        path = Path(path_value).expanduser().resolve()
+        return {
+            "content": _read_text_file(path, description="corpus source"),
+            "content_format": _detect_content_format(path),
+            "kind": "path",
+            "path": str(path),
+            "title": args.title or path.stem.replace("-", " ").replace("_", " "),
+        }
+    request = urllib_request.Request(url=url_value, method="GET")
+    try:
+        with urllib_request.urlopen(request, timeout=20.0) as response:
+            body = response.read()
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+    except urllib_error.URLError as exc:
+        raise SystemExit(
+            f"Could not fetch corpus URL: {url_value} ({exc.reason})"
+        ) from exc
+    return {
+        "content": body.decode("utf-8"),
+        "content_format": _content_format_from_url(url_value, content_type),
+        "kind": "url",
+        "title": args.title or _title_from_url(url_value),
+        "url": url_value,
+    }
+
+
+def _content_format_from_url(url: str, content_type: str) -> str:
+    suffix = Path(unquote(urlparse(url).path)).suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        return "markdown"
+    if suffix == ".json":
+        return "json"
+    if suffix in {".html", ".htm"}:
+        return "html"
+    if "markdown" in content_type:
+        return "markdown"
+    if "json" in content_type:
+        return "json"
+    if "html" in content_type:
+        return "html"
+    return "text"
+
+
+def _title_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    stem = Path(unquote(parsed.path)).stem.replace("-", " ").replace("_", " ").strip()
+    return stem or parsed.netloc or "Imported URL"
+
+
+def _corpus_namespace(args: argparse.Namespace, env: dict[str, str]) -> str:
+    if args.namespace:
+        return str(args.namespace).strip()
+    if args.space == "shared":
+        return SHARED_TRADECRAFT_NAMESPACE
+    return env.get("NEUROCORE_DEFAULT_NAMESPACE", "security-lab")
+
+
+def _corpus_sensitivity(space: str) -> str:
+    return "standard" if space == "shared" else "restricted"
+
+
+def _corpus_origin(space: str) -> str:
+    return "external-public" if space == "shared" else "engagement-curated"
 
 
 def _paper_markdown(
@@ -846,6 +1301,7 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
 
     query_ready = False
     semantic_ready = False
+    semantic_mode = "not-configured"
     report_ready = False
     briefing_ready = False
     report_provider_mode = "disabled"
@@ -864,15 +1320,18 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
         report_provider_mode = _report_provider_mode(config)
         if config.semantic_backend == "none":
             semantic_ready = True
+            semantic_mode = "metadata-only"
         elif config.semantic_backend == "sentence-transformers":
             semantic_status, semantic_issue = sentence_transformers_status()
             semantic_ready = semantic_status == "ready"
+            semantic_mode = "hybrid-ready" if semantic_ready else "dependency-missing"
             if not semantic_ready:
                 query_ready = False
                 briefing_ready = False
                 if semantic_issue:
                     issues_by_surface["semantic"].append(semantic_issue)
         else:
+            semantic_mode = "unknown-backend"
             issues_by_surface["semantic"].append(
                 f"Semantic backend {config.semantic_backend} is not recognized."
             )
@@ -907,6 +1366,7 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
         "consensus_report_ready": report_ready,
         "briefing_ready": briefing_ready,
         "semantic_ready": semantic_ready,
+        "semantic_mode": semantic_mode,
         "query_ready": query_ready,
         "report_ready": report_ready,
         "report_provider_mode": report_provider_mode,
@@ -918,6 +1378,9 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
             key: value for key, value in issues_by_surface.items() if value
         },
         "issues": _dedupe_strings(issues),
+        "recommendations": [
+            "Enable sentence-transformers for stronger semantic corpus recall."
+        ],
     }
 
 
@@ -1081,6 +1544,17 @@ def _run_neurocore(
     command: str | list[str],
     request: dict[str, object],
 ) -> int:
+    payload = _call_neurocore(repo_root, env, command, request)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _call_neurocore(
+    repo_root: Path,
+    env: dict[str, str],
+    command: str | list[str],
+    request: dict[str, object],
+) -> dict[str, object]:
     python_path = _resolve_repo_python(repo_root, env)
     if python_path is None:
         raise SystemExit(
@@ -1105,21 +1579,21 @@ def _run_neurocore(
     )
     if completed.returncode != 0:
         if completed.stderr:
-            sys.stderr.write(completed.stderr)
-        elif completed.stdout:
-            sys.stderr.write(completed.stdout)
-        return completed.returncode
+            raise SystemExit(completed.stderr)
+        if completed.stdout:
+            raise SystemExit(completed.stdout)
+        raise SystemExit("NeuroCore command failed")
 
     output = completed.stdout.strip()
     if not output:
-        return 0
+        return {}
     try:
         payload = json.loads(output)
     except json.JSONDecodeError:
-        print(output)
-        return 0
-    print(json.dumps(payload, indent=2, sort_keys=True))
-    return 0
+        return {"raw_output": output}
+    if not isinstance(payload, dict):
+        return {"payload": payload}
+    return payload
 
 
 def _resolve_repo_python(repo_root: Path, env: dict[str, str]) -> Path | None:
@@ -1163,11 +1637,21 @@ def print_readiness_summary(
     print("", file=stdout)
     print(
         "Readiness summary:"
-        f" semantic={'ready' if payload['semantic_ready'] else 'not ready'};"
+        f" semantic={'ready' if payload['semantic_ready'] else 'not ready'}"
+        f" ({payload.get('semantic_mode', 'unknown')});"
         f" query={'ready' if payload['query_ready'] else 'not ready'};"
         f" report={'ready' if payload['report_ready'] else 'not ready'}",
         file=stdout,
     )
+    if payload.get("semantic_mode") == "metadata-only":
+        print(
+            "Semantic retrieval is currently metadata-only. Enable sentence-transformers for stronger corpus recall.",
+            file=stdout,
+        )
+    recommendations = payload.get("recommendations", [])
+    if recommendations:
+        for recommendation in recommendations:
+            print(f"Recommendation: {recommendation}", file=stdout)
     print(
         f"Report provider mode: {payload['report_provider_mode']}",
         file=stdout,
