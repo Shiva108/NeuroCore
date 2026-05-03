@@ -80,6 +80,8 @@ def test_capabilities_reports_ready_config_and_consensus(tmp_path: Path):
     assert payload["semantic_ready"] is True
     assert payload["default_namespace_ready"] is True
     assert payload["consensus_report_ready"] is True
+    assert payload["distillation_ready"] is True
+    assert payload["shared_corpus_ready"] is True
     assert payload["report_provider_mode"] == "external_openai_compatible"
     assert payload["resolved_python"] == str(python_path.absolute())
     assert payload["issues"] == []
@@ -109,6 +111,8 @@ def test_capabilities_reports_mock_local_provider_mode(tmp_path: Path):
     assert payload["report_ready"] is True
     assert payload["briefing_ready"] is True
     assert payload["report_provider_mode"] == "mock_local"
+    assert payload["distillation_ready"] is False
+    assert payload["shared_corpus_ready"] is False
 
 
 def test_capabilities_marks_report_unready_when_local_mock_health_fails(tmp_path: Path):
@@ -138,6 +142,8 @@ def test_capabilities_marks_report_unready_when_local_mock_health_fails(tmp_path
     assert payload["query_ready"] is True
     assert payload["briefing_ready"] is True
     assert payload["report_ready"] is False
+    assert payload["distillation_ready"] is False
+    assert payload["shared_corpus_ready"] is False
     assert payload["issues_by_surface"]["report"] == ["mock provider health check failed"]
 
 
@@ -563,6 +569,43 @@ def test_parse_distillation_records_validates_source_kind_contract():
     assert payload[0]["metadata"]["record_kind"] == "accepted-proof-pattern"
 
 
+def test_parse_distillation_records_accepts_expanded_htb_writeup_record_kinds():
+    payload = SECURITY_WORKFLOW._parse_distillation_records(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "title": "Credential path pattern",
+                        "bucket": "findings",
+                        "content": "Anonymous share -> default password -> WinRM foothold.",
+                        "tags": ["class:unknown", "tech:smb", "auth:anonymous"],
+                        "metadata": {
+                            "record_kind": "credential-path-pattern",
+                            "source_section": "credentials",
+                        },
+                        "source_type": "finding_note",
+                    },
+                    {
+                        "title": "Workflow decision",
+                        "bucket": "ops",
+                        "content": "Bound the spray before expanding credentials.",
+                        "tags": ["class:unknown", "tech:ldap", "auth:user"],
+                        "metadata": {
+                            "record_kind": "workflow-decision",
+                            "source_section": "workflow-decisions",
+                        },
+                        "source_type": "workflow_note",
+                    },
+                ]
+            }
+        ),
+        source_kind="htb-writeup",
+    )
+
+    assert payload[0]["metadata"]["record_kind"] == "credential-path-pattern"
+    assert payload[1]["metadata"]["record_kind"] == "workflow-decision"
+
+
 def test_parse_distillation_records_rejects_missing_contract_fields():
     with pytest.raises(ValueError, match="record_kind and source_section"):
         SECURITY_WORKFLOW._parse_distillation_records(
@@ -826,6 +869,49 @@ def test_main_import_corpus_falls_back_to_raw_only_on_invalid_distillation_paylo
     assert calls[0][1]["metadata"]["distillation_status"] == "skipped-provider-error"
     payload = json.loads(stdout.getvalue())
     assert payload["distilled_count"] == 0
+
+
+def test_main_import_corpus_reports_raw_only_as_non_ready_shared_corpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_call_neurocore(repo_root, env, command, request):
+        calls.append((command, request))
+        return {
+            "id": request["metadata"]["raw_document_id"],
+            "kind": "document",
+            "namespace": request["namespace"],
+            "bucket": request["bucket"],
+        }
+
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_call_neurocore", fake_call_neurocore)
+    monkeypatch.setattr(SECURITY_WORKFLOW, "_safe_load_config", lambda env: None)
+    monkeypatch.setattr(
+        SECURITY_WORKFLOW, "_maybe_reexec_into_repo_runtime", lambda argv, repo_root: None
+    )
+    source = tmp_path / "raw-only.md"
+    source.write_text("# Shared\n\nRaw capture only.", encoding="utf-8")
+    stdout = io.StringIO()
+    monkeypatch.setattr(SECURITY_WORKFLOW.sys, "stdout", stdout)
+
+    exit_code = SECURITY_WORKFLOW.main(
+        [
+            "import-corpus",
+            "--space",
+            "shared",
+            "--source-kind",
+            "htb-writeup",
+            str(source),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    payload = json.loads(stdout.getvalue())
+    assert payload["distilled_count"] == 0
+    assert payload["distillation_status"] == "skipped-no-provider"
+    assert payload["shared_corpus_ready"] is False
 
 
 def test_main_import_corpus_threads_explicit_engagement_sealed_sensitivity(

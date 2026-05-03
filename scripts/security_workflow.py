@@ -113,6 +113,14 @@ CORPUS_RECORD_KIND_SPECS = {
             "blocker": "ops",
             "dead-end": "ops",
             "tool-interpretation": "payloads",
+            "validated-finding": "findings",
+            "credential-path-pattern": "findings",
+            "payload-lesson": "payloads",
+            "workflow-decision": "ops",
+            "postexploitation-lesson": "ops",
+            "operator-retrospective": "ops",
+            "attack-surface-summary": "recon",
+            "detection-prevention": "reports",
         },
         "source_sections": {
             "recon",
@@ -121,6 +129,14 @@ CORPUS_RECORD_KIND_SPECS = {
             "blockers",
             "dead-ends",
             "tool-output",
+            "attack-surface",
+            "validated-findings",
+            "credentials",
+            "payloads",
+            "workflow-decisions",
+            "post-exploitation",
+            "retrospective",
+            "detection-prevention",
         },
     },
     "article": {
@@ -589,6 +605,11 @@ def _add_utility_parsers(subparsers) -> None:
         help="Forward a structured query request to the NeuroCore CLI surface.",
     )
     query_json_parser.add_argument("--request-json", required=True)
+    capture_json_parser = subparsers.add_parser(
+        "capture-json",
+        help="Forward a structured capture request to the NeuroCore CLI surface.",
+    )
+    capture_json_parser.add_argument("--request-json", required=True)
     for name in (
         "brain-create",
         "brain-get",
@@ -700,6 +721,14 @@ def main(argv: list[str] | None = None) -> int:
             repo_root,
             env,
             "query",
+            _parse_request_object(args.request_json),
+        )
+
+    if args.command == "capture-json":
+        return _run_neurocore(
+            repo_root,
+            env,
+            "capture",
             _parse_request_object(args.request_json),
         )
 
@@ -922,6 +951,7 @@ def _import_corpus(
         "distillation_status": distillation_status,
         "distilled_captures": distilled_captures,
         "distilled_count": len(distilled_captures),
+        "shared_corpus_ready": bool(args.space == "shared" and distilled_captures),
         "knowledge_space": args.space,
         "namespace": raw_request["namespace"],
         "raw_capture": {
@@ -1553,6 +1583,8 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
     report_ready = False
     briefing_ready = False
     report_provider_mode = "disabled"
+    distillation_ready = False
+    shared_corpus_ready = False
     report_bootstrap_attempted = False
     report_bootstrap_started = False
     report_bootstrap_healthy = False
@@ -1604,6 +1636,14 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
             issues_by_surface["report"].append("Consensus reporting disabled")
         except ValueError as exc:
             issues_by_surface["report"].append(str(exc))
+        distillation_ready = bool(
+            report_ready
+            and config.enable_multi_model_consensus
+            and config.consensus_provider == "openai_compatible"
+            and not _is_local_mock_base_url(config.consensus_base_url)
+            and _build_corpus_distiller(config) is not None
+        )
+        shared_corpus_ready = bool(query_ready and distillation_ready)
 
     for surface_issues in issues_by_surface.values():
         issues.extend(surface_issues)
@@ -1618,6 +1658,8 @@ def _capabilities_payload(repo_root: Path, env: dict[str, str]) -> dict[str, obj
         "query_ready": query_ready,
         "report_ready": report_ready,
         "report_provider_mode": report_provider_mode,
+        "distillation_ready": distillation_ready,
+        "shared_corpus_ready": shared_corpus_ready,
         "report_bootstrap_attempted": report_bootstrap_attempted,
         "report_bootstrap_started": report_bootstrap_started,
         "report_bootstrap_healthy": report_bootstrap_healthy,
